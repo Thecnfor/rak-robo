@@ -1,0 +1,91 @@
+observation_pose_node:
+  ros__parameters:
+    command_topic: '/hand_command'
+    joint_names: ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    observation_pose: [0.0, 0.58, -1.67, -0.5, 1.51, 0.0]
+    publish_rate_hz: 10.0
+    hold_seconds: 3.0
+
+basic_arm_motion_node:
+  ros__parameters:
+    command_topic: '/hand_command'
+    joint_names: ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    start_pose: [0.0, 0.58, -1.67, -0.5, 1.51, 0.0]
+    demo_pose: [0.0, 0.35, -1.30, -0.35, 1.35, 0.0]
+    steps: 60
+    rate_hz: 20.0
+    hold_seconds: 1.0
+
+yoloe_detector_node:
+  ros__parameters:
+    rgb_topic: '/arm_camera/rgb'
+    model_path: 'yoloe-26l-seg.pt'
+    classes: ['pencil', 'pen']
+    conf: 0.01
+    device: 'cuda:0'
+    auto_detect: true
+    run_period_sec: 0.5
+    mask_topic: '/demo_grasp/object_mask'
+    bbox_topic: '/demo_grasp/bbox'
+    label_topic: '/demo_grasp/label'
+    confidence_topic: '/demo_grasp/confidence'
+    debug_image_topic: '/demo_grasp/debug_image'
+    save_debug_images: true
+    debug_image_dir: '/workspace/demo_ws/grasp_demo_debug'
+
+depth_pose_estimator_node:
+  ros__parameters:
+    depth_topic: '/arm_camera/depth'
+    camera_info_topic: '/arm_camera/camera_info'
+    camera_frame: 'arm_Camera'
+    bbox_topic: '/demo_grasp/bbox'
+    mask_topic: '/demo_grasp/object_mask'
+    point_topic: '/demo_grasp/object_point_camera'
+    long_axis_topic: '/demo_grasp/long_axis_camera'
+    depth_window_px: 5
+    axis_step_px: 10
+
+tf_transform_demo_node:
+  ros__parameters:
+    base_frame: 'base_link_arm'
+    point_camera_topic: '/demo_grasp/object_point_camera'
+    long_axis_camera_topic: '/demo_grasp/long_axis_camera'
+    point_base_topic: '/demo_grasp/object_point_base'
+    normal_base_topic: '/demo_grasp/normal_base'
+    long_axis_base_topic: '/demo_grasp/long_axis_base'
+    normal_mode: 'fixed_base'
+    fixed_normal_base: [0.0, 0.0, -1.0]
+
+plan_to_pose_node:
+  ros__parameters:
+    base_frame: 'base_link_arm'
+    workspace_min: [-0.80, -0.70, 0.02]
+    workspace_max: [0.80, 0.70, 1.20]
+    commanded_pose_topic: '/demo_grasp/commanded_pose'
+    command_topic: '/hand_command'
+    joint_names: ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    reference_pose: [0.0, 0.58, -1.67, -0.5, 1.51, 0.0]
+    execute_steps: 60
+    execute_rate_hz: 20.0
+    hold_seconds: 0.5
+
+gripper_demo_node:
+  ros__parameters:
+    joint_name: 'gripper_l_joint1'
+    command_topic: '/hand_command'
+    open_position: 100.0
+    close_position: 0.0
+    open_angle: 0.78
+    close_angle: 0.0
+
+pick_place_state_machine:
+  ros__parameters:
+    command_topic: '/hand_command'
+    observation_pose: [0.0, 0.58, -1.67, -0.5, 1.51, 0.0]
+    joint_names: ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    target_classes: ['pencil', 'pen']
+    confidence_threshold: 0.01
+    pre_grasp_offset: 0.08
+    finger_tip_offset: 0.03
+    lift_offset: 0.12
+    place_position: [-0.45, -0.22, 0.18]

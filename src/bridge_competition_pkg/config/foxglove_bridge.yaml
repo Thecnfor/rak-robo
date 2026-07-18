@@ -1,10 +1,10 @@
 # foxglove_bridge 参数配置
 #
 # 加载方式：ros2 launch bridge_competition_pkg foxglove_bridge.launch.py
-# host bringup 和独立 launch 均固定使用 8765，禁止并行启动两个实例
+# 由 systemd --user foxglove-bridge.service 守护常驻
 #
 # ROS_DOMAIN_ID 必须 =45 才能看到 /fmu/* 和 PX4 / Isaac Sim 的 topic
-# 不要在这里设置 ROS_DOMAIN_ID，由 isaacsim51.service / shell profile 统一管理
+# 不要在这里设置 ROS_DOMAIN_ID，由 systemd unit Environment 统一管理
 
 /foxglove_bridge:
   ros__parameters:
@@ -17,32 +17,23 @@
     send_buffer_size: 10000000
     num_threads: 4            # 0 = 单线程；多订阅器并发调到 4-8
 
-    # 比赛 bringup 保持只读，避免 Studio 成为第二个 /fmu/in/* 写入者。
+    # 只开观测 capability，避免 Studio 成为第二个 /fmu/in/* 写入者。
+    # 比赛最终态可以按需收紧（去掉 connectionGraph 进一步限制），开发期保留。
     capabilities:
       - connectionGraph
 
-    # topic 白名单（正则，^ 和 $ 都别丢）
-    # 空数组 = 不过滤，全暴露；带宽紧张时再收紧
-    topic_whitelist:
-      - "^/clock$"
-      - "^/tf$"
-      - "^/tf_static$"
-      - "^/drone0/.+"                   # Pegasus 原始状态/传感器/下视相机
-      - "^/drone/navigation/.+"
-      - "^/drone/drop_.+"
-      - "^/avoidance/lidar/pointcloud$"
-      - "^/fmu/in/.+"
-      - "^/fmu/out/.+"
-      - "^/odom$"
-      - "^/cmd_vel$"
-      - "^/hand_command_.+"
-      - "^/(left|right)_gripper_command$"
-      - "^/cargo_bay/.+"
-      - "^/arena/.+/state$"
+    # 空白名单：完全删除 topic_whitelist 参数 = 不过滤，Studio 看到所有 topic
+    # 调试期改完节点立刻能看到；比赛录制时建议加回，按需收紧：
+    #   topic_whitelist:
+    #     - "^/drone/navigation/.+"
+    #     - "^/fmu/in/.+"
+    #     - "^/fmu/out/.+"
+    #     - "^/drone0/.+"
+    #     - ...
 
-    # 高频 / 大 topic 黑洞名单（按需加）
+    # 高频 / 大 topic 黑洞名单（按需加；空白名单下靠这个兜底）
     topic_blacklist:
-      - "^/arm_camera/(rgb|depth)_(left|right)$"   # 双目 raw 太大，先关；需要时改 image_transport compressed
+      - "^/arm_camera/(rgb|depth)_(left|right)$"   # 双目 raw 太大
 
     # QoS 覆盖：PX4 /fmu/* 是 BEST_EFFORT+TRANSIENT_LOCAL，bridge 默认 RELIABLE 订阅不上
     # 完整 key = "<topic_regex>::<policy>"，value 是字符串表示

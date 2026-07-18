@@ -66,7 +66,7 @@ docs/
 | 文档位置 | 源码位置 |
 |---|---|
 | `setup/ego_planner_integration.md` | `src/drone_navigation_pkg/`（flight_core / ego_local_planner / trajectory_executor） |
-| `setup/foxglove_setup.md` | `src/bridge_competition_pkg/launch/foxglove_bridge.launch.py` + `config/foxglove_bridge.yaml`（已常驻进 host_bridge_bringup） |
+| `setup/foxglove_setup.md` | `~/.config/systemd/user/foxglove-bridge.service`（systemd 守护）+ `src/bridge_competition_pkg/launch/foxglove_bridge.launch.py` + `config/foxglove_bridge.yaml`（与 host_bridge_bringup 解耦） |
 | `setup/env_setup.md` § PegasusSimulator | `src/bridge_competition_pkg/` 的 scene_app_x1_5_1_native.py |
 | `runbooks/M1_modeling_runbook.md` | `scenes/team/environments/<team>_office_X1_full.usd`（A 在 Kit VNC 里做） |
 | `runbooks/M2_omni_bridge_spec.yaml` | Isaac ActionGraph 节点配置（在 Kit Script Editor 里做）|

@@ -41,9 +41,9 @@ def generate_launch_description() -> LaunchDescription:
         IncludeLaunchDescription(
             _launch('competition_orchestrator_pkg', 'orchestrator.launch.py')
         ),
-        # Foxglove 不在这里拉起——它由 src/bridge_competition_pkg/scripts/foxglove_daemon.sh
-        # 在独立 tmux session 'foxglove' 里常驻运行；改 YAML 后用
-        #   tmux send-keys -t foxglove C-c
+        # Foxglove 不在这里拉起——它由 systemd --user (foxglove-bridge.service)
+        # 独立常驻运行，空白名单让任何业务节点起的 topic 自动可见；改 YAML 后用
+        #   systemctl --user restart foxglove-bridge.service
         # 即可重启，不用动这一坨。详见 docs/setup/foxglove_setup.md
         # 接口健康检查
         Node(
