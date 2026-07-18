@@ -1,0 +1,74 @@
+# Isaac/Pegasus/PX4 无人机桥契约。代码真值源：
+# src/bridge_competition_pkg/bridge_competition_pkg/interface_audit.py
+
+host:
+  ros_distro: jazzy
+  ros_domain_id: 45
+  rmw_implementation: rmw_fastrtps_cpp
+  isaac_sim: "5.1"
+  px4: "v1.16.2"
+  px4_msgs_branch: release/1.16
+
+backend_modes:
+  px4:
+    first_backend: PX4MavlinkBackend
+    observer_backend: ROS2Backend(sub_control=false)
+    px4_autolaunch: false
+    simulator_transport: tcp://localhost:4560
+  direct_rotor:
+    backends:
+      - ROS2Backend(sub_control=true)
+    warning: low-speed fixed-airframe smoke test only
+
+isaac_publishers:
+  - {topic: /clock, type: rosgraph_msgs/msg/Clock}
+  - {topic: /tf, type: tf2_msgs/msg/TFMessage}
+  - {topic: /drone0/state/pose, type: geometry_msgs/msg/PoseStamped}
+  - {topic: /drone0/state/twist, type: geometry_msgs/msg/TwistStamped}
+  - {topic: /drone0/state/twist_inertial, type: geometry_msgs/msg/TwistStamped}
+  - {topic: /drone0/state/accel, type: geometry_msgs/msg/AccelStamped}
+  - {topic: /drone0/sensors/imu, type: sensor_msgs/msg/Imu}
+  - {topic: /drone0/sensors/mag, type: sensor_msgs/msg/MagneticField}
+  - {topic: /drone0/sensors/gps, type: sensor_msgs/msg/NavSatFix}
+  - {topic: /drone0/sensors/gps_twist, type: geometry_msgs/msg/TwistStamped}
+  - {topic: /avoidance/lidar/pointcloud, type: sensor_msgs/msg/PointCloud2}
+  - {topic: /drone_0_ego_odom, type: nav_msgs/msg/Odometry}
+  - {topic: /drone0/down_camera/color/image_raw, type: sensor_msgs/msg/Image}
+  - {topic: /cargo_bay/status, type: std_msgs/msg/String}
+
+direct_rotor_inputs:
+  - /drone0/control/rotor0/ref
+  - /drone0/control/rotor1/ref
+  - /drone0/control/rotor2/ref
+  - /drone0/control/rotor3/ref
+
+px4_outputs:
+  - /fmu/out/vehicle_odometry
+  - /fmu/out/vehicle_status
+  - /fmu/out/vehicle_command_ack
+  - /fmu/out/vehicle_land_detected
+
+px4_inputs:
+  unique_writer: /trajectory_executor
+  rate_hz: 20
+  topics:
+    - /fmu/in/offboard_control_mode
+    - /fmu/in/trajectory_setpoint
+    - /fmu/in/vehicle_command
+
+navigation:
+  package: drone_navigation_pkg
+  normalized_odometry: /drone/navigation/odometry
+  goal: /drone/navigation/goal
+  trajectory: /drone/navigation/trajectory
+  debug_path: /drone/navigation/planned_path
+  state: /drone/navigation/state
+
+cargo:
+  command_topic: /cargo_bay/command
+  status_topic: /cargo_bay/status
+
+runtime_ticket:
+  command: >-
+    ros2 run bridge_competition_pkg drone_interface_audit
+    --ros-args -p report_path:=/tmp/drone_interface_report.json

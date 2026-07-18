@@ -1,0 +1,56 @@
+# 任务清单（按模块）
+
+## M1 机器人建模（A · VNC Kit GUI）
+- [ ] 加载 `active/worlds/X1_race/X1_race_scene.usd`
+- [ ] 装 Mercury X1 + Sunray + air_fpv_box
+- [ ] 装 X1 双臂相机 + Sunray 下视相机 + X1 LiDAR
+- [ ] 物料摆放（pencil 等）
+- [ ] 保存 `active/worlds/<team>_office_X1_full.usd`
+- [ ] 整理 prim_path_registry.yaml
+
+## M2 OmniGraph ROS2 桥（C）
+- [x] PegasusSimulator 集成脚本：PX4/observer 与 direct-rotor 互斥模式、点云、里程计、下视相机、舱门
+- [x] **PX4 v1.16.2 Docker 外部模拟器模式**（当前等待实际比赛场景 TCP 4560 接入；不得写成 DDS 飞行联调已通过）
+- [x] `drone_navigation_pkg` 滚动体素/A*/B-spline 安全占位核心、PX4 状态适配和 20 Hz 唯一 executor
+- [ ] 指定 EGO commit 的 raycast/LBFGS 核心：官方 remote 无该 object，需取得正确 ROS 2 fork/可达 commit 后移植
+- [ ] Isaac 端加 ROS2 节点：PublishTF/Clock/Image/LaserScan + SubscribeTwist/JointState
+- [x] host 端总 bringup、视觉、地空协调和接口审计
+- [ ] 真实比赛场景接口票据：必备 topic/QoS/频率/电机映射全部通过
+
+## M3 ROS2 host bringup（C）
+- [x] 编译导航、视觉、协调、bridge、px4_msgs、grasp_demo_interfaces
+- [ ] nav2 + dual_arm + perception + bridge 全 launch
+
+## M4 空地协同调度（D）
+- [ ] air_ground_coordinator 状态机
+- [ ] 状态机图（Mermaid/Graphviz）
+
+## M5 双臂驱动（A）
+- [ ] dual_arm_observation / demo / gripper_server / pick_place
+- [ ] cuRobo IK 集成（加分 +4）
+- [ ] 双臂协同并行抓取（加分 +6）
+- [ ] DualGripperCommand action 加进 grasp_demo_interfaces
+
+## M6 视觉对准（B）
+- [ ] yoloe_detector_node（DetectObject action）
+- [ ] depth_pose_estimator_node + TF
+- [x] drone_target_detector（HSV + minEnclosingCircle）
+- [x] supervisor 视觉稳定/速度/偏差投放门控（参数待实景标定）
+
+## M7 货舱控制（D）
+- [x] `/cargo_bay/door_command` action 与 `/cargo_bay/{command,status}` 适配
+- [x] CargoDoorCommand / DroneFlightCommand actions 加进 grasp_demo_interfaces
+
+## M8 文档 + 提交（D）
+- [ ] 技术文档 PDF
+- [ ] 12 段视频 + 5 段加分视频
+- [ ] ffmpeg 水印 + 录屏脚本
+- [ ] 打包 + md5
+
+## M9 集成测试（A）
+- [ ] M9.1 World.play() → host topic 全在
+- [ ] M9.2 cmd_vel → X1 动
+- [ ] M9.3 hand_command → 双臂 + 双夹爪动
+- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land
+- [ ] M9.5 /demo_detect_object → 检测出 pencil
+- [ ] M9.6 全流程一镜到底

@@ -1,0 +1,8 @@
+air_ground_orchestrator:
+  ros__parameters:
+    use_sim_time: true
+    auto_dispatch_after_ground: true
+    default_action_timeout: 30.0
+    return_height: 1.8
+    allow_manual_flight_actions: false
+    allow_manual_door_actions: false

@@ -1,0 +1,13 @@
+uint8 SIDE=0
+uint8 BOTTOM=1
+uint8 OPEN=0
+uint8 CLOSE=1
+uint8 door
+uint8 command
+builtin_interfaces/Duration timeout
+---
+bool success
+string final_state
+string reason
+---
+string current_state

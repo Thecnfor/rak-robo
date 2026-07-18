@@ -1,0 +1,214 @@
+// Copyright 2026 Competition Team
+// SPDX-License-Identifier: GPL-3.0-only
+#include "drone_navigation_pkg/flight_core.hpp"
+
+#include <cmath>
+#include <vector>
+
+#include <gtest/gtest.h>
+
+using drone_navigation::FlightPhase;
+using drone_navigation::FlightSupervisor;
+using drone_navigation::ExecutorSafetyAction;
+using drone_navigation::PlannerConfig;
+using drone_navigation::Px4OdometrySample;
+using drone_navigation::RollingVoxelMap;
+using drone_navigation::SupervisorInputs;
+using drone_navigation::UniformBsplineTrajectory;
+using drone_navigation::Vec3;
+using drone_navigation::VoxelPlanner;
+using drone_navigation::executorSafetyAction;
+
+namespace
+{
+constexpr double kTolerance = 1e-6;
+}
+
+TEST(CoordinateFrames, ConvertsNedFrdToEnuFlu)
+{
+  Px4OdometrySample px4;
+  px4.position_ned = {1.0, 2.0, -3.0};
+  px4.velocity_ned = {4.0, 5.0, -6.0};
+  px4.angular_velocity_frd = {0.1, 0.2, 0.3};
+  px4.attitude_frd_to_ned_wxyz = {1.0, 0.0, 0.0, 0.0};
+
+  const auto ros = drone_navigation::px4NedFrdToRosEnuFlu(px4);
+  EXPECT_NEAR(ros.position_enu.x, 2.0, kTolerance);
+  EXPECT_NEAR(ros.position_enu.y, 1.0, kTolerance);
+  EXPECT_NEAR(ros.position_enu.z, 3.0, kTolerance);
+  EXPECT_NEAR(ros.velocity_enu.x, 5.0, kTolerance);
+  EXPECT_NEAR(ros.velocity_enu.y, 4.0, kTolerance);
+  EXPECT_NEAR(ros.velocity_enu.z, 6.0, kTolerance);
+  EXPECT_NEAR(ros.angular_velocity_flu.x, 0.1, kTolerance);
+  EXPECT_NEAR(ros.angular_velocity_flu.y, -0.2, kTolerance);
+  EXPECT_NEAR(ros.angular_velocity_flu.z, -0.3, kTolerance);
+
+  const double quaternion_norm = std::sqrt(
+    ros.attitude_flu_to_enu.x * ros.attitude_flu_to_enu.x +
+    ros.attitude_flu_to_enu.y * ros.attitude_flu_to_enu.y +
+    ros.attitude_flu_to_enu.z * ros.attitude_flu_to_enu.z +
+    ros.attitude_flu_to_enu.w * ros.attitude_flu_to_enu.w);
+  EXPECT_NEAR(quaternion_norm, 1.0, kTolerance);
+}
+
+TEST(VoxelPlanner, DetoursAroundInflatedObstacle)
+{
+  PlannerConfig config;
+  config.resolution = 0.1;
+  config.inflation_radius = 0.2;
+  config.horizontal_range = 4.0;
+  config.vertical_range = 2.0;
+  config.virtual_ceiling = 2.9;
+  VoxelPlanner planner(config);
+
+  std::vector<Vec3> wall;
+  for (double y = -0.3; y <= 0.3; y += 0.1) {
+    for (double z = 0.7; z <= 1.3; z += 0.1) {
+      wall.push_back({1.0, y, z});
+    }
+  }
+  planner.setObstacles(wall);
+
+  const auto path = planner.plan({0.0, 0.0, 1.0}, {2.0, 0.0, 1.0});
+  ASSERT_GE(path.size(), 3U);
+  EXPECT_NEAR(path.front().x, 0.0, kTolerance);
+  EXPECT_NEAR(path.back().x, 2.0, kTolerance);
+  for (std::size_t index = 1; index < path.size(); ++index) {
+    EXPECT_TRUE(planner.collisionFree(path[index - 1], path[index]));
+  }
+}
+
+TEST(RollingVoxelMap, RetainsRecentObstaclesAcrossSparseFramesAndExpiresThem)
+{
+  RollingVoxelMap map(0.1, 1.0);
+  map.update({{1.0, 0.0, 1.0}}, 10.0);
+  map.update({}, 10.2);
+
+  EXPECT_EQ(map.obstaclesAround({0.0, 0.0, 1.0}, 5.5, 4.5, 10.2).size(), 1U);
+  EXPECT_TRUE(map.obstaclesAround({0.0, 0.0, 1.0}, 5.5, 4.5, 11.01).empty());
+}
+
+TEST(UniformBsplineTrajectory, HonorsEndpointsAndDynamicLimits)
+{
+  const auto trajectory = UniformBsplineTrajectory::fromWaypoints(
+    {{0.0, 0.0, 1.0}, {1.0, 0.4, 1.2}, {2.0, 0.0, 1.0}}, 0.5, 1.0);
+  ASSERT_FALSE(trajectory.empty());
+  ASSERT_GT(trajectory.duration(), 0.0);
+
+  const auto start = trajectory.sample(0.0);
+  const auto finish = trajectory.sample(trajectory.duration());
+  EXPECT_NEAR(start.position.x, 0.0, kTolerance);
+  EXPECT_NEAR(start.position.y, 0.0, kTolerance);
+  EXPECT_NEAR(finish.position.x, 2.0, kTolerance);
+  EXPECT_NEAR(finish.position.y, 0.0, kTolerance);
+
+  for (double time = 0.0; time <= trajectory.duration(); time += 0.02) {
+    const auto state = trajectory.sample(time);
+    EXPECT_LE(drone_navigation::norm(state.velocity), 0.5 + 1e-5);
+    EXPECT_LE(drone_navigation::norm(state.acceleration), 1.0 + 1e-5);
+  }
+}
+
+TEST(FlightSupervisor, EnforcesDoorAndDataFreshnessSafetyGates)
+{
+  FlightSupervisor supervisor;
+  SupervisorInputs inputs;
+  inputs.mission_requested = true;
+  inputs.ground_task_complete = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::PREFLIGHT);
+
+  inputs.side_door_closed = true;
+  inputs.px4_ready = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::ARMING);
+  EXPECT_TRUE(supervisor.update(inputs).request_arm_offboard);
+
+  inputs.armed = true;
+  inputs.offboard = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::TAKEOFF);
+
+  inputs.odometry_age_seconds = 0.31;
+  const auto stale = supervisor.update(inputs);
+  EXPECT_EQ(stale.phase, FlightPhase::HOLD);
+  EXPECT_TRUE(stale.hold_position);
+
+  inputs.odometry_age_seconds = 1.1;
+  const auto lost = supervisor.update(inputs);
+  EXPECT_TRUE(lost.request_land);
+}
+
+TEST(FlightSupervisor, RunsNominalMissionSequence)
+{
+  FlightSupervisor supervisor;
+  SupervisorInputs inputs;
+  inputs.mission_requested = true;
+  inputs.ground_task_complete = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::PREFLIGHT);
+  inputs.side_door_closed = true;
+  inputs.px4_ready = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::ARMING);
+  inputs.armed = true;
+  inputs.offboard = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::TAKEOFF);
+  inputs.at_takeoff_pose = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::EGO_TRANSIT);
+  inputs.at_search_pose = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::TARGET_SEARCH);
+  inputs.target_visible = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::VISUAL_ALIGN);
+  inputs.target_aligned = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::DROP_HOLD);
+  EXPECT_TRUE(supervisor.update(inputs).command_open_bottom_door);
+  inputs.payload_released = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::RETURN);
+  inputs.at_home = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
+  inputs.landed = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::COMPLETE);
+}
+
+TEST(FlightSupervisor, LandsOnPx4FailsafeWhileAirborne)
+{
+  FlightSupervisor supervisor;
+  SupervisorInputs inputs;
+  inputs.mission_requested = true;
+  inputs.ground_task_complete = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::PREFLIGHT);
+  inputs.side_door_closed = true;
+  inputs.px4_ready = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::ARMING);
+  inputs.armed = true;
+  inputs.offboard = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::TAKEOFF);
+
+  inputs.px4_failsafe = true;
+  const auto decision = supervisor.update(inputs);
+  EXPECT_EQ(decision.phase, FlightPhase::HOLD);
+  EXPECT_TRUE(decision.request_land);
+  EXPECT_TRUE(supervisor.update(inputs).request_land);
+}
+
+TEST(ExecutorWatchdog, HoldsThenLandsOnStaleControlIntent)
+{
+  EXPECT_EQ(
+    executorSafetyAction(true, 0.1, 0.1, 0.1, 0.3, 1.0),
+    ExecutorSafetyAction::CONTINUE);
+  EXPECT_EQ(
+    executorSafetyAction(true, 0.1, 0.31, 0.1, 0.3, 1.0),
+    ExecutorSafetyAction::HOLD);
+  EXPECT_EQ(
+    executorSafetyAction(true, 0.1, 1.01, 0.1, 0.3, 1.0),
+    ExecutorSafetyAction::LAND);
+}
+
+TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)
+{
+  EXPECT_EQ(
+    executorSafetyAction(true, 0.1, 0.1, 0.31, 0.3, 1.0),
+    ExecutorSafetyAction::HOLD);
+  EXPECT_EQ(
+    executorSafetyAction(false, 0.1, 0.1, 5.0, 0.3, 1.0),
+    ExecutorSafetyAction::CONTINUE);
+  EXPECT_EQ(
+    executorSafetyAction(true, 1.1, 0.1, 0.1, 0.3, 1.0),
+    ExecutorSafetyAction::LAND);
+}

@@ -1,0 +1,55 @@
+# foxglove_bridge 参数配置
+#
+# 加载方式：ros2 launch bridge_competition_pkg foxglove_bridge.launch.py
+# host bringup 和独立 launch 均固定使用 8765，禁止并行启动两个实例
+#
+# ROS_DOMAIN_ID 必须 =45 才能看到 /fmu/* 和 PX4 / Isaac Sim 的 topic
+# 不要在这里设置 ROS_DOMAIN_ID，由 isaacsim51.service / shell profile 统一管理
+
+/foxglove_bridge:
+  ros__parameters:
+    # 网络
+    port: 8765
+    address: 0.0.0.0          # 0.0.0.0 = 监听所有接口，跨机访问可用；只本机改成 127.0.0.1
+
+    # 性能
+    use_compression: true     # 大流量（图像 / 点云）强烈建议开
+    send_buffer_size: 10000000
+    num_threads: 4            # 0 = 单线程；多订阅器并发调到 4-8
+
+    # 比赛 bringup 保持只读，避免 Studio 成为第二个 /fmu/in/* 写入者。
+    capabilities:
+      - connectionGraph
+
+    # topic 白名单（正则，^ 和 $ 都别丢）
+    # 空数组 = 不过滤，全暴露；带宽紧张时再收紧
+    topic_whitelist:
+      - "^/clock$"
+      - "^/tf$"
+      - "^/tf_static$"
+      - "^/drone0/.+"                   # Pegasus 原始状态/传感器/下视相机
+      - "^/drone/navigation/.+"
+      - "^/drone/drop_.+"
+      - "^/avoidance/lidar/pointcloud$"
+      - "^/fmu/in/.+"
+      - "^/fmu/out/.+"
+      - "^/odom$"
+      - "^/cmd_vel$"
+      - "^/hand_command_.+"
+      - "^/(left|right)_gripper_command$"
+      - "^/cargo_bay/.+"
+      - "^/arena/.+/state$"
+
+    # 高频 / 大 topic 黑洞名单（按需加）
+    topic_blacklist:
+      - "^/arm_camera/(rgb|depth)_(left|right)$"   # 双目 raw 太大，先关；需要时改 image_transport compressed
+
+    # QoS 覆盖：PX4 /fmu/* 是 BEST_EFFORT+TRANSIENT_LOCAL，bridge 默认 RELIABLE 订阅不上
+    # 完整 key = "<topic_regex>::<policy>"，value 是字符串表示
+    qos_overrides:
+      "/fmu/out/vehicle_odometry::reliability": "best_effort"
+      "/fmu/out/vehicle_status::reliability": "best_effort"
+      "/fmu/out/vehicle_attitude::reliability": "best_effort"
+      "/fmu/out/vehicle_local_position::reliability": "best_effort"
+      "/fmu/out/sensor_combined::reliability": "best_effort"
+      "/fmu/out/timesync_status::reliability": "best_effort"

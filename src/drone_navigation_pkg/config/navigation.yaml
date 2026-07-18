@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    use_sim_time: true
+    map_frame: map
+    odom_frame: map
+    base_frame: drone_0_ego
+    voxel_resolution: 0.10
+    obstacle_inflation: 0.25
+    obstacle_memory_seconds: 1.0
+    local_horizontal_range: 5.5
+    local_vertical_range: 4.5
+    virtual_ceiling: 2.9
+    max_velocity: 0.5
+    max_acceleration: 1.0
+    takeoff_height: 1.8
+    odometry_hold_timeout: 0.3
+    data_land_timeout: 1.0
+    offboard_prestream_seconds: 1.0
+    px4_map_origin: [4.55, -0.38, 1.13]
+    mission_autostart: false
+    drop_search_pose: [0.0, 0.0, 1.8]
+    drop_min_height: 1.6
+    drop_max_height: 2.0

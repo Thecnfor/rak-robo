@@ -1,0 +1,8 @@
+drone_target_detector:
+  ros__parameters:
+    use_sim_time: true
+    image_topic: /drone0/down_camera/color/image_raw
+    min_area: 300.0
+    min_circularity: 0.70
+    morphology_kernel: 5
+    center_threshold: 0.04
