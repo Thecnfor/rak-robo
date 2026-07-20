@@ -20,18 +20,10 @@ cd "${REPO_ROOT}"
 # Rebuild the technical doc to PDF if pandoc + xelatex are present.
 TECHNICAL_DOC_MD="${DOC_DIR}/技术文档-XX队-预选赛.md"
 TECHNICAL_DOC_PDF="${DOC_DIR}/技术文档-${TEAM_NAME}-预选赛.pdf"
-if command -v pandoc >/dev/null 2>&1 && command -v xelatex >/dev/null 2>&1; then
-  echo "[$(date -Is)] rendering technical doc PDF"
-  pandoc "${TECHNICAL_DOC_MD}" \
-      -o "${TECHNICAL_DOC_PDF}" \
-      --pdf-engine=xelatex \
-      -V mainfont="Noto Sans CJK SC" \
-      -V geometry:margin=2cm \
-      --toc --toc-depth=2
+if [[ -x "${DOC_DIR}/render_tech_doc_pdf.sh" ]]; then
+  "${DOC_DIR}/render_tech_doc_pdf.sh" "${TEAM_NAME}" || true
 else
-  echo "[$(date -Is)] WARNING: pandoc/xelatex not available; PDF must be"
-  echo "    rendered by hand on a host with TeX Live before submission."
-  echo "    Source: ${TECHNICAL_DOC_MD}"
+  echo "[$(date -Is)] WARNING: render_tech_doc_pdf.sh missing; PDF will not be generated"
 fi
 
 # Stage the submission tree.
@@ -90,9 +82,12 @@ fi
 
 # Top-level engineering README.
 cp "${DOC_DIR}/diagrams/README.md" "${SUBMISSION_ROOT}/工程文件/README.md"
-
-# Top-level videos: expected to be staged by the operator.
-# The script does not auto-collect videos from VNC recordings.
+if [[ -d "videos" ]]; then
+  for f in videos/*.mp4; do
+    [[ -f "$f" ]] || continue
+    cp "$f" "${SUBMISSION_ROOT}/videos/"
+  done
+fi
 
 # Build the zip.
 ZIP_PATH="${REPO_ROOT}/${ZIP_NAME}"
