@@ -4,6 +4,7 @@ from bridge_competition_pkg.interface_contract import (
     direct_rotor_output_allowed,
     evaluate_interface,
     observed_frequency_hz,
+    resolve_actual_topic,
 )
 
 
@@ -118,3 +119,59 @@ class InterfaceContractTest(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['unpublished'], ['/sensor'])
         self.assertEqual(result['disconnected_commands'], ['/cargo_bay/command'])
+
+    def test_resolve_actual_topic_keeps_unversioned_name(self):
+        graph = {
+            '/fmu/out/vehicle_odometry': ['px4_msgs/msg/VehicleOdometry'],
+        }
+        self.assertEqual(
+            resolve_actual_topic('/fmu/out/vehicle_odometry', graph),
+            '/fmu/out/vehicle_odometry',
+        )
+
+    def test_resolve_actual_topic_picks_versioned_variant(self):
+        # VehicleStatus (MESSAGE_VERSION=1) is published by uXRCE-DDS as
+        # ``/fmu/out/vehicle_status_v1``; the contract stays unversioned.
+        graph = {
+            '/fmu/out/vehicle_odometry': ['px4_msgs/msg/VehicleOdometry'],
+            '/fmu/out/vehicle_status_v1': ['px4_msgs/msg/VehicleStatus'],
+        }
+        self.assertEqual(
+            resolve_actual_topic('/fmu/out/vehicle_status', graph),
+            '/fmu/out/vehicle_status_v1',
+        )
+        self.assertEqual(
+            resolve_actual_topic('/fmu/out/vehicle_odometry', graph),
+            '/fmu/out/vehicle_odometry',
+        )
+
+    def test_evaluate_interface_accepts_versioned_px4_topics(self):
+        # /fmu/out/vehicle_status is the unversioned contract name, but PX4
+        # SITL (with px4_msgs >= 2) actually publishes it as ``_v1``; the
+        # helper should map the requirement to the live topic so the audit
+        # does not falsely flag a missing publisher.
+        graph = {
+            '/fmu/out/vehicle_odometry': ['px4_msgs/msg/VehicleOdometry'],
+            '/fmu/out/vehicle_status_v1': ['px4_msgs/msg/VehicleStatus'],
+            '/fmu/out/vehicle_command_ack': ['px4_msgs/msg/VehicleCommandAck'],
+            '/fmu/out/vehicle_land_detected': ['px4_msgs/msg/VehicleLandDetected'],
+        }
+        result = evaluate_interface(
+            [
+                '/fmu/out/vehicle_odometry',
+                '/fmu/out/vehicle_status',
+                '/fmu/out/vehicle_command_ack',
+                '/fmu/out/vehicle_land_detected',
+            ],
+            graph,
+            {name: ['/uxrce'] for name in graph},
+            {name: ['/consumer'] for name in graph},
+            require_fmu_writer=False,
+        )
+        self.assertEqual(result['missing'], [])
+        self.assertEqual(result['unpublished'], [])
+        self.assertEqual(
+            result['resolved_topics']['/fmu/out/vehicle_status'],
+            '/fmu/out/vehicle_status_v1',
+        )
+        self.assertTrue(result['ok'])

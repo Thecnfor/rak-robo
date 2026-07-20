@@ -69,7 +69,7 @@ public:
       std::bind(&TrajectoryExecutorNode::onOdometry, this, std::placeholders::_1));
     auto px4_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
     status_subscription_ = create_subscription<px4_msgs::msg::VehicleStatus>(
-      "/fmu/out/vehicle_status", px4_qos,
+      "/fmu/out/vehicle_status_v1", px4_qos,
       std::bind(&TrajectoryExecutorNode::onVehicleStatus, this, std::placeholders::_1));
     timer_ = create_wall_timer(
       std::chrono::milliseconds(50), std::bind(&TrajectoryExecutorNode::tick, this));

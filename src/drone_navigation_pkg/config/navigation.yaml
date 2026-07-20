@@ -2,8 +2,7 @@
   ros__parameters:
     use_sim_time: true
     map_frame: map
-    odom_frame: map
-    base_frame: drone_0_ego
+    base_frame: drone_base_link
     voxel_resolution: 0.10
     obstacle_inflation: 0.25
     obstacle_memory_seconds: 1.0

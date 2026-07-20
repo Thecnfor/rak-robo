@@ -14,7 +14,8 @@ docs/
 ├── setup/                          ← 环境 / 安装 / 集成方案
 │   ├── env_setup.md                ← 总环境方案（PX4 SITL + PegasusSimulator + Isaac Sim 5.1）
 │   ├── ego_planner_integration.md  ← EGO-Planner 复用算法库 + 项目适配层设计
-│   └── foxglove_setup.md           ← Foxglove WebSocket 桥（常驻观测工具）
+│   ├── foxglove_setup.md           ← Foxglove WebSocket 桥（常驻观测工具）
+│   └── isaacsim_scene_daemon.md    ← isaacsim51-scene.service：比赛场景守护 + 全链（PX4/uXRCE/ROS）
 ├── contracts/                      ← 包间契约（最常被改的）
 │   └── interface_contracts.md      ← topic / action / frame / param 契约
 ├── runbooks/                       ← 任务操作手册 + 模板
@@ -39,6 +40,7 @@ docs/
 2. [`../src/px4_sitl_usage.md`](../src/px4_sitl_usage.md) — PX4 SITL Docker 启动 / DDS 桥接验证
 3. [`setup/foxglove_setup.md`](setup/foxglove_setup.md) — 装 foxglove_bridge 看 ROS 2 topic
 4. [`setup/ego_planner_integration.md`](setup/ego_planner_integration.md) — EGO 算法库接入
+5. [`setup/isaacsim_scene_daemon.md`](setup/isaacsim_scene_daemon.md) — `isaacsim51-scene.service` 比赛场景守护 + Vulkan ICD 坑
 
 ### ✏️ 改 topic / action / frame
 > ⚠️ code-as-spec 真值源在 `bridge_competition_pkg/interface_audit.py` 的 `DEFAULT_REQUIRED_TOPICS`

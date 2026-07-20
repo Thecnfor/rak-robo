@@ -57,13 +57,17 @@ EGO、视觉、返航和业务 action 只能提交 `/drone/navigation/*` 控制�
 
 ## PX4 v1.16.2 接口
 
-本工作区 `px4_msgs` 固定 `release/1.16`，与 Docker 中 PX4 v1.16.2 对齐，使用
-未版本化 topic：
-
+本工作区 `px4_msgs` 当前在 PX4 main 分支（v2.0.1），不是 `release/1.16`。
+uXRCE-DDS 按 `px4_msgs/*.msg` 的 `MESSAGE_VERSION` 决定是否给 topic 加 `_vN` 后缀：
+`VehicleStatus.msg` 的 `MESSAGE_VERSION=1` → 实际发布 `vehicle_status_v1`；
+`VehicleOdometry/CommandAck/LandDetected` 都是 `MESSAGE_VERSION=0` → 未版本化。
+运行时 `interface_audit.py::resolve_actual_topic` 自动把契约里的 unversioned 名
+解析到带 `_v1` 的实际 topic。代码侧（`px4_state_adapter_node.cpp`、
+`trajectory_executor_node.cpp`）直接订阅 `vehicle_status_v1`，不在 launch 层 remap。
 | PX4 → host | host → PX4 |
 |---|---|
 | `/fmu/out/vehicle_odometry` | `/fmu/in/offboard_control_mode` |
-| `/fmu/out/vehicle_status` | `/fmu/in/trajectory_setpoint` |
+| `/fmu/out/vehicle_status_v1` (MESSAGE_VERSION=1) | `/fmu/in/trajectory_setpoint` |
 | `/fmu/out/vehicle_command_ack` | `/fmu/in/vehicle_command` |
 | `/fmu/out/vehicle_land_detected` | 仅 executor 可写 |
 

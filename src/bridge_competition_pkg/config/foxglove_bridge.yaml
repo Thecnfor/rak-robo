@@ -39,7 +39,7 @@
     # 完整 key = "<topic_regex>::<policy>"，value 是字符串表示
     qos_overrides:
       "/fmu/out/vehicle_odometry::reliability": "best_effort"
-      "/fmu/out/vehicle_status::reliability": "best_effort"
+      "/fmu/out/vehicle_status_v1::reliability": "best_effort"
       "/fmu/out/vehicle_attitude::reliability": "best_effort"
       "/fmu/out/vehicle_local_position::reliability": "best_effort"
       "/fmu/out/sensor_combined::reliability": "best_effort"

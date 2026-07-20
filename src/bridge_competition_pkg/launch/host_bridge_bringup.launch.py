@@ -62,7 +62,7 @@ def generate_launch_description() -> LaunchDescription:
                 '/drone/navigation/planned_path',
                 '/drone/drop_target_offset',
                 '/avoidance/lidar/pointcloud',
-                '/fmu/out/vehicle_status',
+                '/fmu/out/vehicle_status_v1',
                 '/cargo_bay/status',
             ],
             output='screen',

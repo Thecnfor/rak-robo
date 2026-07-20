@@ -34,17 +34,20 @@ export ROS_DOMAIN_ID=45
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 ros2 topic list | sort | grep '^/fmu/'
-ros2 topic info -v /fmu/out/vehicle_status
-ros2 topic echo --qos-reliability best_effort /fmu/out/vehicle_status --once
+ros2 topic info -v /fmu/out/vehicle_status_v1
+ros2 topic echo --qos-reliability best_effort /fmu/out/vehicle_status_v1 --once
 ```
 
-本项目 PX4 v1.16.2 使用未版本化 `/fmu/out/vehicle_status`，不要再写
-`vehicle_status_v1`。工作区 `src/px4_msgs` 必须保持 `release/1.16`。
+本项目 PX4 v1.16.2 实际发布**带 `_v1` 后缀**的版本化 `/fmu/out/vehicle_status_v1`（因为
+`px4_msgs/VehicleStatus.msg` 的 `MESSAGE_VERSION=1`，uXRCE-DDS 自动加版本后缀）。其它
+`/fmu/out/*` 均为未版本化（`VehicleOdometry/CommandAck/LandDetected` 都是 `MESSAGE_VERSION=0`）。
+主机侧 `px4_state_adapter` 和 `trajectory_executor` 订阅 `vehicle_status_v1`。
+工作区 `src/px4_msgs` 当前是 PX4 main 分支（v2.0.1），不是 `release/1.16`。
 
 导航主链依赖：
 
 - `/fmu/out/vehicle_odometry`
-- `/fmu/out/vehicle_status`
+- `/fmu/out/vehicle_status_v1`
 - `/fmu/out/vehicle_command_ack`
 - `/fmu/out/vehicle_land_detected`
 - `/fmu/in/offboard_control_mode`

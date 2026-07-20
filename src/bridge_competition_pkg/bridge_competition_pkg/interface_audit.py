@@ -10,6 +10,7 @@ from typing import Dict, List
 from bridge_competition_pkg.interface_contract import (
     evaluate_interface,
     observed_frequency_hz,
+    resolve_actual_topic,
 )
 import rclpy
 from rclpy.clock import Clock, ClockType
@@ -102,17 +103,23 @@ class InterfaceAudit(Node):
     def _audit(self) -> None:
         graph_types = dict(self.get_topic_names_and_types())
         self._create_observers(graph_types)
+        resolved = {
+            name: resolve_actual_topic(name, graph_types) for name in self._required
+        }
         topics: Dict[str, dict] = {}
         for name in self._required:
-            publishers = self.get_publishers_info_by_topic(name)
-            subscribers = self.get_subscriptions_info_by_topic(name)
+            actual = resolved[name]
+            publishers = self.get_publishers_info_by_topic(actual)
+            subscribers = self.get_subscriptions_info_by_topic(actual)
             topics[name] = {
-                'types': graph_types.get(name, []),
+                'required_name': name,
+                'actual_name': actual,
+                'types': graph_types.get(actual, []),
                 'observed_frequency_hz': round(
-                    observed_frequency_hz(list(self._sample_times.get(name, []))), 3
+                    observed_frequency_hz(list(self._sample_times.get(actual, []))), 3
                 ),
-                'frame_ids': sorted(self._frame_ids.get(name, set())),
-                'last_header_stamp': self._header_stamps.get(name),
+                'frame_ids': sorted(self._frame_ids.get(actual, set())),
+                'last_header_stamp': self._header_stamps.get(actual),
                 'publishers': [
                     {
                         'node': self._node_path(endpoint),
@@ -128,20 +135,24 @@ class InterfaceAudit(Node):
                     for endpoint in subscribers
                 ],
             }
+        # The evaluate_interface helper does its own resolution, but we pass it
+        # node-name maps keyed by the resolved name so its checks line up.
+        publisher_nodes = {
+            name: [entry['node'] for entry in topics[name]['publishers']]
+            for name in self._required
+        }
+        subscriber_nodes = {
+            name: [
+                entry['node'] for entry in topics[name]['subscribers']
+                if entry['node'] != '/drone_interface_audit'
+            ]
+            for name in self._required
+        }
         summary = evaluate_interface(
             self._required,
             graph_types,
-            {
-                name: [entry['node'] for entry in topics[name]['publishers']]
-                for name in self._required
-            },
-            {
-                name: [
-                    entry['node'] for entry in topics[name]['subscribers']
-                    if entry['node'] != '/drone_interface_audit'
-                ]
-                for name in self._required
-            },
+            publisher_nodes,
+            subscriber_nodes,
             require_fmu_writer=self._require_fmu_writer,
         )
         report = {
@@ -179,20 +190,21 @@ class InterfaceAudit(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
-        for topic in self._required:
-            if topic in self._topic_subscriptions or not graph_types.get(topic):
+        for required_name in self._required:
+            actual_name = resolve_actual_topic(required_name, graph_types)
+            if actual_name in self._topic_subscriptions or not graph_types.get(actual_name):
                 continue
             try:
-                message_type = get_message(graph_types[topic][0])
-                self._topic_subscriptions[topic] = self.create_subscription(
+                message_type = get_message(graph_types[actual_name][0])
+                self._topic_subscriptions[actual_name] = self.create_subscription(
                     message_type,
-                    topic,
-                    partial(self._observe_message, topic),
+                    actual_name,
+                    partial(self._observe_message, actual_name),
                     qos,
                 )
             except (AttributeError, ImportError, ModuleNotFoundError, ValueError) as exception:
                 self.get_logger().warn(
-                    f'cannot observe {topic} frequency/frame: {exception}'
+                    f'cannot observe {required_name} (resolved {actual_name}) frequency/frame: {exception}'
                 )
 
     def _observe_message(self, topic: str, message) -> None:
@@ -207,7 +219,6 @@ class InterfaceAudit(Node):
             'sec': header.stamp.sec,
             'nanosec': header.stamp.nanosec,
         }
-
 
 def main(args=None) -> None:
     rclpy.init(args=args)

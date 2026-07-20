@@ -50,7 +50,7 @@ public:
       "/fmu/out/vehicle_odometry", px4_qos,
       std::bind(&Px4StateAdapter::onOdometry, this, std::placeholders::_1));
     status_subscription_ = create_subscription<px4_msgs::msg::VehicleStatus>(
-      "/fmu/out/vehicle_status", px4_qos,
+      "/fmu/out/vehicle_status_v1", px4_qos,
       std::bind(&Px4StateAdapter::onStatus, this, std::placeholders::_1));
     ack_subscription_ = create_subscription<px4_msgs::msg::VehicleCommandAck>(
       "/fmu/out/vehicle_command_ack", px4_qos,
