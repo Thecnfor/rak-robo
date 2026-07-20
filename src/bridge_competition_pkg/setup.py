@@ -28,6 +28,7 @@ setup(
             'chain_status = bridge_competition_pkg.chain_status:main',
             'mission_trigger = bridge_competition_pkg.mission_trigger:main',
             'ground_state_sim = bridge_competition_pkg.ground_state_sim:main',
+            'cargo_status_sim = bridge_competition_pkg.cargo_status_sim:main',
         ],
     },
 )

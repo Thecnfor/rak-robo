@@ -1,11 +1,9 @@
 """Publish a one-shot mission request to the supervisor to start the air phase.
 
-Used by the M9.4 flight acceptance run. The supervisor stays in `IDLE` until
-`/drone/navigation/mission_request=true` arrives, and the `mission_autostart`
-flag in `navigation.yaml` only gates this from the YAML side. Once the ground
-task is complete and this fires, the supervisor moves through
-`PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH → VISUAL_ALIGN →
-DROP_HOLD → RETURN → LAND → COMPLETE`.
+The supervisor stays in `IDLE` until `/drone/navigation/mission_request=true`
+arrives on its transient_local subscription. We match that QoS profile
+so the message is delivered even if the supervisor is started after the
+trigger.
 
 Usage:
     source /opt/ros/jazzy/setup.bash
@@ -19,15 +17,23 @@ from __future__ import annotations
 import sys
 
 import rclpy
+import rclpy.qos
 from rclpy.node import Node
 from std_msgs.msg import Bool
+
+
+_MISSION_QOS = rclpy.qos.QoSProfile(
+    depth=1,
+    reliability=rclpy.qos.ReliabilityPolicy.RELIABLE,
+    durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 class _Trigger(Node):
     def __init__(self) -> None:
         super().__init__('mission_trigger')
         self._publisher = self.create_publisher(
-            Bool, '/drone/navigation/mission_request', 10)
+            Bool, '/drone/navigation/mission_request', _MISSION_QOS)
 
     def fire(self) -> None:
         message = Bool()
@@ -42,7 +48,6 @@ def main() -> int:
     rclpy.init()
     try:
         trigger = _Trigger()
-        # spin briefly so the publisher is discovered by DDS before we publish
         for _ in range(5):
             rclpy.spin_once(trigger, timeout_sec=0.1)
         trigger.fire()
