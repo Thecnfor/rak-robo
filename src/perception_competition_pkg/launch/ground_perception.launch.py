@@ -39,4 +39,16 @@ def generate_launch_description() -> LaunchDescription:
                 'simulated_distance': 1.2,
             }],
         ),
+        Node(
+            package='perception_competition_pkg',
+            executable='detect_object_server_node',
+            name='detect_object_server_node',
+            output='screen',
+        ),
+        Node(
+            package='perception_competition_pkg',
+            executable='plan_to_pose_server_node',
+            name='plan_to_pose_server_node',
+            output='screen',
+        ),
     ])

@@ -30,6 +30,8 @@ setup(
             'drone_target_detector = perception_competition_pkg.drone_target_detector_node:main',
             'yoloe_detector_node = perception_competition_pkg.yoloe_detector_node:main',
             'depth_pose_estimator_node = perception_competition_pkg.depth_pose_estimator_node:main',
+            'detect_object_server_node = perception_competition_pkg.detect_object_server_node:main',
+            'plan_to_pose_server_node = perception_competition_pkg.plan_to_pose_server_node:main',
         ],
     },
 )
