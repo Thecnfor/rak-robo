@@ -1,0 +1,34 @@
+flowchart LR
+    subgraph "Pegasus Sim (Isaac Sim 5.1)"
+      scene["/drone0/state/pose + /drone0/sensors/imu + lidar + camera"]
+      mavlink["PX4MavlinkBackend (TCP 4560)"]
+    end
+    subgraph "PX4 SITL Docker"
+      px4["PX4 v1.16.2 (uXRCE 8888)"]
+    end
+    subgraph "host Fast DDS dom 45"
+      adapter["px4_state_adapter"]
+      planner["ego_local_planner"]
+      exec["trajectory_executor (sole /fmu/in/* writer)"]
+      sup["flight_supervisor"]
+      orch["air_ground_orchestrator"]
+    end
+    scene -- MAVLink TCP 4560 --> mavlink
+    mavlink --> px4
+    px4 -- uXRCE DDS --> adapter
+    adapter -- /drone/navigation/odometry --> planner
+    adapter -- /drone/navigation/px4_status --> sup
+    planner -- /drone/navigation/trajectory --> exec
+    sup -- /drone/navigation/goal --> planner
+    sup -- /drone/navigation/control_mode --> exec
+    exec -- /fmu/in/* --> px4
+    px4 -- /fmu/out/* --> adapter
+    orch -- /drone/flight_command (DroneFlightCommand) --> sup
+    orch -- /cargo_bay/door_command (CargoDoorCommand) --> sup
+    sup -- /arena/ground/state = COMPLETE --> orch
+    orch -- /drone/navigation/mission_request --> sup
+
+    classDef node fill:#fff0f0,stroke:#a44,color:#000;
+    classDef pipeline fill:#f0fff0,stroke:#4a4,color:#000;
+    class adapter,planner,exec,sup,orch node;
+    class scene,mavlink,px4 pipeline;

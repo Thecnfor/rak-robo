@@ -1,0 +1,26 @@
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> READY: ground_state ∈ {COMPLETE, SUCCESS, GROUND_DONE}
+    READY --> DISPATCH: mission_request == true
+    DISPATCH --> FLIGHT: send /drone/flight_command (TAKEOFF)
+    DISPATCH --> GROUND: keep /arena/ground/state alive
+    FLIGHT --> COMPLETE: flight landed + payload_released
+    FLIGHT --> ABORT: LAND / ABORT safety override
+    ABORT --> COMPLETE: /drone/navigation/state == COMPLETE
+    GROUND --> [*]: arena teardown (post-submission)
+    COMPLETE --> [*]
+
+    note right of IDLE
+        MissionGate emits exactly one
+        mission_request after a single ground completion.
+        Re-dispatch is suppressed even if the ground state
+        re-enters COMPLETE.
+    end note
+
+    note right of DISPATCH
+        The orchestrator owns the public actions
+        /drone/flight_command (DroneFlightCommand) and
+        /cargo_bay/door_command (CargoDoorCommand);
+        LAND and ABORT are always legal safety requests
+        regardless of allow_manual_flight_actions.
+    end note

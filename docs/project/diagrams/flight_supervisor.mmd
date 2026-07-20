@@ -1,0 +1,37 @@
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> PREFLIGHT: mission_request ∧ ground_task_complete
+    PREFLIGHT --> ARMING: side_door_closed ∧ px4_ready
+    ARMING --> TAKEOFF: armed ∧ offboard
+    TAKEOFF --> EGO_TRANSIT: at_takeoff_pose (home.xz, takeoff_height)
+    EGO_TRANSIT --> TARGET_SEARCH: at_search_pose (drop_search_pose)
+    TARGET_SEARCH --> VISUAL_ALIGN: target_visible
+    VISUAL_ALIGN --> DROP_HOLD: target_aligned (visual stable ≥ 0.8 s)
+    DROP_HOLD --> RETURN: payload_released
+    RETURN --> LAND: at_home
+    LAND --> COMPLETE: landed
+
+    state HOLD_EMERGENCY {
+        [*] --> HOLD
+        HOLD --> LAND: stale_data > 1.0 s OR px4_failsafe
+    }
+    ARMING --> HOLD_EMERGENCY: stale_data > 0.3 s
+    TAKEOFF --> HOLD_EMERGENCY: stale_data > 0.3 s
+    EGO_TRANSIT --> HOLD_EMERGENCY: stale_data > 0.3 s
+    TARGET_SEARCH --> HOLD_EMERGENCY: stale_data > 0.3 s
+    VISUAL_ALIGN --> HOLD_EMERGENCY: stale_data > 0.3 s
+    DROP_HOLD --> HOLD_EMERGENCY: stale_data > 0.3 s
+    RETURN --> HOLD_EMERGENCY: stale_data > 0.3 s
+    HOLD_EMERGENCY --> LAND: emergency_land_sent
+
+    note right of PREFLIGHT
+        supervisor publishes "left_close" until
+        /cargo_bay/status reports "left_closed" or
+        "side_closed"; the request is idempotent.
+    end note
+
+    note right of DROP_HOLD
+        supervisor publishes "bottom_open" once and
+        waits for /cargo_bay/status to contain
+        "payload_released".
+    end note

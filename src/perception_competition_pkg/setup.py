@@ -28,6 +28,8 @@ setup(
     entry_points={
         'console_scripts': [
             'drone_target_detector = perception_competition_pkg.drone_target_detector_node:main',
+            'yoloe_detector_node = perception_competition_pkg.yoloe_detector_node:main',
+            'depth_pose_estimator_node = perception_competition_pkg.depth_pose_estimator_node:main',
         ],
     },
 )

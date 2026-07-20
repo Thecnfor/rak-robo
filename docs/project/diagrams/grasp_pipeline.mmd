@@ -1,0 +1,31 @@
+flowchart LR
+    subgraph "arm_camera"
+      RGB[/arm_camera/rgb/]
+      D[/arm_camera/depth/]
+      CI[/arm_camera/camera_info/]
+    end
+    subgraph "perception_competition_pkg"
+      Y[yoloe_detector_node]
+      DP[depth_pose_estimator_node]
+    end
+    subgraph "grasp_demo_pkg"
+      TF[tf_transform_demo_node]
+      PP[plan_to_pose_node]
+      SM[pick_place_state_machine]
+      GR[gripper_demo_node]
+    end
+    RGB --> Y
+    Y -- /demo_grasp/bbox + label + confidence + mask --> DP
+    D --> DP
+    CI --> DP
+    DP -- /demo_grasp/object_point_camera + long_axis_camera --> TF
+    TF -- /demo_grasp/object_point_base + normal + long_axis_base --> PP
+    PP -- /hand_command (candidates) --> GR
+    GR -- /hand_command (final) --> SM
+    SM -- /demo_detect_object action --> Y
+    SM -- /demo_plan_to_pose action --> PP
+    SM -- /arena/ground/state = COMPLETE --> air_ground_orchestrator
+    SM -- /hand_command --> MC[Mercury X1 joints via OmniGraph]
+
+    classDef node fill:#f0f4ff,stroke:#446,color:#000;
+    class Y,DP,TF,PP,SM,GR,MC node;

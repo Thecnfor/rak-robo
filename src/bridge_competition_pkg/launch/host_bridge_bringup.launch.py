@@ -38,10 +38,11 @@ def generate_launch_description() -> LaunchDescription:
         # 业务节点
         IncludeLaunchDescription(_launch('drone_navigation_pkg', 'navigation.launch.py')),
         IncludeLaunchDescription(_launch('perception_competition_pkg', 'drone_target.launch.py')),
+        IncludeLaunchDescription(_launch('perception_competition_pkg', 'ground_perception.launch.py')),
         IncludeLaunchDescription(
             _launch('competition_orchestrator_pkg', 'orchestrator.launch.py')
         ),
-        # Foxglove 不在这里拉起——它由 systemd --user (foxglove-bridge.service)
+        IncludeLaunchDescription(_launch('dual_arm_pkg', 'dual_arm.launch.py')),
         # 独立常驻运行，空白名单让任何业务节点起的 topic 自动可见；改 YAML 后用
         #   systemctl --user restart foxglove-bridge.service
         # 即可重启，不用动这一坨。详见 docs/setup/foxglove_setup.md

@@ -20,8 +20,10 @@ setup(
     description='Mercury X1 dual-arm driver.',
     license='Apache-2.0',
     entry_points={
-        # 在 TODO.md 里列出的节点，加到这里
-        # 例子：
-        # 'dual_arm_observation_node = dual_arm_pkg.dual_arm_observation_node:main',
+        'console_scripts': [
+            'dual_arm_observation_node = dual_arm_pkg.dual_arm_observation_node:main',
+            'dual_gripper_server_node = dual_arm_pkg.dual_gripper_server_node:main',
+            'dual_arm_pick_place_node = dual_arm_pkg.dual_arm_pick_place_node:main',
+        ],
     },
 )
