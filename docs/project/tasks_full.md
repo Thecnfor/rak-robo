@@ -19,24 +19,22 @@
 
 ## M3 ROS2 host bringup（C）
 - [x] 编译导航、视觉、协调、bridge、px4_msgs、grasp_demo_interfaces
-- [ ] nav2 + dual_arm + perception + bridge 全 launch
+- [x] nav2 + dual_arm + perception + bridge 全 launch
 
 ## M4 空地协同调度（D）
-- [ ] air_ground_coordinator 状态机
-- [ ] 状态机图（Mermaid/Graphviz）
+- [x] air_ground_coordinator 状态机
+- [x] 状态机图（Mermaid/Graphviz）
 
 ## M5 双臂驱动（A）
-- [ ] dual_arm_observation / demo / gripper_server / pick_place
-- [ ] cuRobo IK 集成（加分 +4）
-- [ ] 双臂协同并行抓取（加分 +6）
-- [ ] DualGripperCommand action 加进 grasp_demo_interfaces
-
+- [x] dual_arm_observation / demo / gripper_server / pick_place
+- [ ] cuRobo IK 集成（加分 +4；占位 plan_to_pose 服务已实现）
+- [ ] 双臂协同并行抓取（加分 +6；pick_place 状态机已实现）
+- [x] DualGripperCommand action 加进 grasp_demo_interfaces（已有 GripperCommand 复用）
 ## M6 视觉对准（B）
-- [ ] yoloe_detector_node（DetectObject action）
-- [ ] depth_pose_estimator_node + TF
+- [x] yoloe_detector_node（DetectObject action）
+- [x] depth_pose_estimator_node + TF
 - [x] drone_target_detector（HSV + minEnclosingCircle）
 - [x] supervisor 视觉稳定/速度/偏差投放门控（参数待实景标定）
-
 ## M7 货舱控制（D）
 - [x] `/cargo_bay/door_command` action 与 `/cargo_bay/{command,status}` 适配
 - [x] CargoDoorCommand / DroneFlightCommand actions 加进 grasp_demo_interfaces
@@ -48,9 +46,9 @@
 - [ ] 打包 + md5
 
 ## M9 集成测试（A）
+- [x] M9.5 /demo_detect_object → 检测出 pencil（已验证：result.success=true detected_class=pencil）
 - [ ] M9.1 World.play() → host topic 全在
 - [ ] M9.2 cmd_vel → X1 动
 - [ ] M9.3 hand_command → 双臂 + 双夹爪动
-- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land
-- [ ] M9.5 /demo_detect_object → 检测出 pencil
+- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land（无人机，已拖）
 - [ ] M9.6 全流程一镜到底
