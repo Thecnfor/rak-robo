@@ -6,7 +6,7 @@ the weights at host-side startup is expensive (~10s) and the model file
 itself is git-ignored; this stub keeps the **contract** working so the
 rest of the grasp pipeline can be wired and smoke-tested today.
 
-Replace the body of `YoloeDetector._infer` with the real `ultralytics.YOLO`
+Replace the body of `_publish_synthetic` with the real `ultralytics.YOLO`
 call when the model file is on disk at `weights/yoloe-26l-seg.pt`.
 
 Topic contract (`grasp_demo_pkg/config/demo_params.yaml`):
@@ -20,7 +20,7 @@ Topic contract (`grasp_demo_pkg/config/demo_params.yaml`):
 Usage:
     ros2 run perception_competition_pkg yoloe_detector_node
     ros2 run perception_competition_pkg yoloe_detector_node --ros-args \
-        -p simulate_target_confidence:=0.92 -p simulate_target_label:=pencil
+        -p simulate_target_confidence:=0.92^{-1}  # placeholder
 """
 
 from __future__ import annotations
@@ -67,20 +67,29 @@ class YoloeDetector(Node):
             f'(stub mode; set weights_path to enable real inference)')
 
     def _on_image(self, message: Image) -> None:
-        # Stash the image so the synthetic-detection timer can grab it.
         self._last_image = message
         self._last_stamp_ns = time.time_ns()
 
     def _publish_synthetic(self) -> None:
-        """Run synthetic detection every 0.5 s while we wait for the real model."""
-        if self._last_image is None or self._bridge is None:
-            return
-        height, width = self._last_image.height, self._last_image.width
-        # Place a synthetic 200x200 box centered in the frame.
-        cx, cy = width // 2, height // 2
+        """Emit a synthetic 200x200 detection at 2 Hz.
+
+        When no image is arriving on the configured image topic (e.g. the
+        Isaac arm camera prim is not yet wired in Pegasus), the stub still
+        emits so the rest of the grasp pipeline can be smoke-tested.
+        Real YOLOE inference would replace this body with an
+        `ultralytics.YOLO(...).predict(...)` call.
+        """
+        width, height = 640, 480
+        if self._last_image is not None:
+            width = self._last_image.width
+            height = self._last_image.height
+        cx = width // 2
+        cy = height // 2
         bbox = Float32MultiArray()
-        bbox.data = [float(cx - 100), float(cy - 100), 200.0, 200.0,
-                     float(self.get_parameter('simulate_target_confidence').value), 0.0]
+        bbox.data = [
+            float(cx - 100), float(cy - 100), 200.0, 200.0,
+            float(self.get_parameter('simulate_target_confidence').value), 0.0,
+        ]
         self._bbox_pub.publish(bbox)
         label = String()
         label.data = str(self.get_parameter('simulate_target_label').value)
@@ -88,18 +97,17 @@ class YoloeDetector(Node):
         confidence = Float32()
         confidence.data = float(self.get_parameter('simulate_target_confidence').value)
         self._conf_pub.publish(confidence)
-        # Synth mask: a 200x200 white square centered. We publish the input
-        # image back as the mask channel too — the consumer only uses
-        # `nonzero()`-shaped masks so the box is what matters.
-        try:
-            mask = self._bridge.cv2_to_imgmsg(
-                self._bridge.imgmsg_to_cv2(self._last_image, desired_encoding='bgr8'),
-                encoding='bgr8')
-        except Exception:
-            return
-        mask.header = self._last_image.header
-        self._mask_pub.publish(mask)
-        self._debug_pub.publish(mask)
+        if self._bridge is not None and self._last_image is not None:
+            try:
+                mask = self._bridge.cv2_to_imgmsg(
+                    self._bridge.imgmsg_to_cv2(
+                        self._last_image, desired_encoding='bgr8'),
+                    encoding='bgr8')
+                mask.header = self._last_image.header
+                self._mask_pub.publish(mask)
+                self._debug_pub.publish(mask)
+            except Exception:
+                pass
 
 
 def main() -> int:
