@@ -1,0 +1,26 @@
+// Render with: dot -Tpng docs/project/diagrams/mission_gate.dot > mission_gate.png
+digraph mission_gate {
+  rankdir=LR;
+  node [shape=ellipse, style=filled, fillcolor="#f0f4ff"];
+  IDLE;
+  READY [fillcolor="#ffffcc"];
+  DISPATCH [fillcolor="#ffffcc"];
+  FLIGHT [fillcolor="#ccffdd"];
+  ABORT [fillcolor="#ffcccc"];
+  GROUND;
+  COMPLETE [fillcolor="#ddccff", shape=doublecircle];
+
+  IDLE -> READY [label="ground ∈ {COMPLETE,\nSUCCESS, GROUND_DONE}"];
+  READY -> DISPATCH [label="mission_request == true"];
+  DISPATCH -> FLIGHT [label="send /drone/flight_command\n(TAKEOFF)"];
+  DISPATCH -> GROUND [label="keep /arena/ground/state alive", style=dashed];
+  FLIGHT -> COMPLETE [label="flight landed\n+ payload_released"];
+  FLIGHT -> ABORT [label="LAND / ABORT\nsafety override"];
+  ABORT -> COMPLETE [label="/drone/navigation/state\n== COMPLETE"];
+  GROUND -> COMPLETE [style=dashed];
+  COMPLETE -> IDLE [style=dashed, label="re-arm"];
+
+  label="MissionGate (competition_orchestrator_pkg::MissionGate)";
+  labelloc=t;
+  fontsize=18;
+}

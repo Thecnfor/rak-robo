@@ -1,0 +1,43 @@
+// Render with: dot -Tpng docs/project/diagrams/flight_supervisor.dot > flight_supervisor.png
+digraph flight_supervisor {
+  rankdir=LR;
+  node [shape=ellipse, style=filled, fillcolor="#f0f4ff"];
+  IDLE;
+  PREFLIGHT [fillcolor="#ffffcc"];
+  ARMING [fillcolor="#ffffcc"];
+  TAKEOFF;
+  EGO_TRANSIT;
+  TARGET_SEARCH;
+  VISUAL_ALIGN;
+  DROP_HOLD [fillcolor="#ccffdd"];
+  RETURN;
+  LAND;
+  COMPLETE [fillcolor="#ddccff", shape=doublecircle];
+  HOLD [fillcolor="#ffcccc"];
+  EMERGENCY_LAND [fillcolor="#ffcccc", shape=box];
+
+  IDLE -> PREFLIGHT [label="mission_request ∧\nground_complete"];
+  PREFLIGHT -> ARMING [label="side_door_closed ∧\npx4_ready"];
+  ARMING -> TAKEOFF [label="armed ∧ offboard"];
+  TAKEOFF -> EGO_TRANSIT [label="at_takeoff_pose"];
+  EGO_TRANSIT -> TARGET_SEARCH [label="at_search_pose"];
+  TARGET_SEARCH -> VISUAL_ALIGN [label="target_visible"];
+  VISUAL_ALIGN -> DROP_HOLD [label="target_aligned\n(visual stable ≥ 0.8s)"];
+  DROP_HOLD -> RETURN [label="payload_released"];
+  RETURN -> LAND [label="at_home"];
+  LAND -> COMPLETE [label="landed"];
+
+  ARMING -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  TAKEOFF -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  EGO_TRANSIT -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  TARGET_SEARCH -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  VISUAL_ALIGN -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  DROP_HOLD -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  RETURN -> HOLD [label="stale_data > 0.3s", style=dashed, color=red];
+  HOLD -> EMERGENCY_LAND [label="stale > 1.0s\nOR px4_failsafe", color=red];
+  EMERGENCY_LAND -> LAND [color=red];
+
+  label="FlightSupervisor (drone_navigation_pkg::FlightSupervisor::update)";
+  labelloc=t;
+  fontsize=18;
+}

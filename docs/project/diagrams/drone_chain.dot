@@ -1,0 +1,47 @@
+// Render with: dot -Tpng docs/project/diagrams/drone_chain.dot > drone_chain.png
+digraph drone_chain {
+  rankdir=LR;
+  node [shape=box, style=filled];
+
+  subgraph cluster_pegasus {
+    label="Pegasus Sim (Isaac Sim 5.1)";
+    style=filled;
+    color=lightgrey;
+    scene [label="/drone0/state/pose\n/drone0/sensors/imu\nlidar + camera", fillcolor="#ffe0e0"];
+    mavlink [label="PX4MavlinkBackend\n(TCP 4560)", fillcolor="#ffe0e0"];
+  }
+  subgraph cluster_px4 {
+    label="PX4 SITL Docker";
+    style=filled;
+    color=lightgrey;
+    px4 [label="PX4 v1.16.2\nuXRCE 8888", fillcolor="#ffe0e0"];
+  }
+  subgraph cluster_host {
+    label="host Fast DDS dom 45";
+    style=filled;
+    color=lightgrey;
+    adapter [label="px4_state_adapter", fillcolor="#e0e0ff"];
+    planner [label="ego_local_planner", fillcolor="#e0e0ff"];
+    exec [label="trajectory_executor\n(sole /fmu/in/* writer)", fillcolor="#e0ffe0"];
+    sup [label="flight_supervisor", fillcolor="#e0e0ff"];
+    orch [label="air_ground_orchestrator", fillcolor="#e0e0ff"];
+  }
+
+  scene -> mavlink [label="MAVLink TCP 4560"];
+  mavlink -> px4;
+  px4 -> adapter [label="uXRCE DDS\n/fmu/out/*"];
+  px4 -> exec [label="/fmu/in/*", style=dashed, color=red, labeldistance=2];
+  adapter -> planner [label="/drone/navigation/\n{odometry, px4_status}"];
+  planner -> exec [label="/drone/navigation/trajectory"];
+  sup -> planner [label="/drone/navigation/goal"];
+  sup -> exec [label="/drone/navigation/control_mode"];
+  exec -> px4 [label="/fmu/in/*", color=red];
+  orch -> sup [label="/drone/flight_command\n(DroneFlightCommand)"];
+  orch -> sup [label="/cargo_bay/door_command\n(CargoDoorCommand)"];
+  sup -> orch [label="/arena/ground/state"];
+  orch -> sup [label="/drone/navigation/\nmission_request"];
+
+  label="Drone chain (sole-writer rule: only trajectory_executor publishes /fmu/in/*)";
+  labelloc=t;
+  fontsize=18;
+}

@@ -1,0 +1,43 @@
+// Render with: dot -Tpng docs/project/diagrams/grasp_pipeline.dot > grasp_pipeline.png
+digraph grasp_pipeline {
+  rankdir=LR;
+  node [shape=box, style=filled, fillcolor="#f0f4ff"];
+  subgraph cluster_arm_camera {
+    label="arm_camera";
+    style=filled;
+    color=lightgrey;
+    RGB [label="/arm_camera/rgb"];
+    D [label="/arm_camera/depth"];
+    CI [label="/arm_camera/camera_info"];
+  }
+  subgraph cluster_perception {
+    label="perception_competition_pkg";
+    style=filled;
+    color=lightgrey;
+    Y [label="yoloe_detector_node", fillcolor="#ffffcc"];
+    DP [label="depth_pose_estimator_node", fillcolor="#ffffcc"];
+  }
+  subgraph cluster_grasp {
+    label="grasp_demo_pkg";
+    style=filled;
+    color=lightgrey;
+    TF [label="tf_transform_demo_node"];
+    PP [label="plan_to_pose_node"];
+    SM [label="pick_place_state_machine", fillcolor="#ccffdd"];
+    GR [label="gripper_demo_node"];
+  }
+  MC [label="Mercury X1\n(OmniGraph ArticulationController)", fillcolor="#ddccff", shape=box3d];
+
+  RGB -> Y;
+  D -> DP;
+  CI -> DP;
+  Y -> DP [label="/demo_grasp/\n{bbox, mask, label}"];
+  DP -> TF [label="/demo_grasp/\n{object_point_camera,\nlong_axis_camera}"];
+  TF -> PP [label="/demo_grasp/\n{object_point_base,\nnormal, long_axis_base}"];
+  PP -> GR [label="/hand_command\n(candidates)"];
+  GR -> SM [label="/hand_command\n(final)"];
+  SM -> Y [label="/demo_detect_object\n(action)", style=dashed];
+  SM -> PP [label="/demo_plan_to_pose\n(action)", style=dashed];
+  SM -> MC [label="/hand_command"];
+  SM -> PP [label="/arena/ground/state\n= COMPLETE", style=dotted, color=green];
+}
