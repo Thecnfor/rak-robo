@@ -26,6 +26,8 @@ source install/setup.bash
 
 ```bash
 export DRONE_BACKEND=px4
+export ENABLE_PENCIL_PAYLOAD=1
+export ENABLE_PREARM_SUPPORT=1
 /var/workspace/docker/isaac/scenes/active/scripts/integrated_runtime/run_demo_scene.sh --world X1
 ```
 
@@ -33,8 +35,15 @@ export DRONE_BACKEND=px4
 
 ```bash
 export DRONE_BACKEND=direct_rotor
+export ENABLE_PENCIL_PAYLOAD=1
+export ENABLE_PREARM_SUPPORT=1
 /var/workspace/docker/isaac/scenes/active/scripts/integrated_runtime/run_demo_scene.sh --world X1
 ```
+
+launcher 在 `env -i` 后显式透传上述两个开关。比赛默认均为 `1`；设为 `0` 只用于
+故障隔离。起飞支架是桌面上的两个静态碰撞垫，不与无人机建立 joint，PX4 产生足够推力
+后会自然脱离。`/cargo_bay/command=status` 应返回
+`payload_locked=True prearm_support=True` 及载荷相对位姿误差。
 
 不要同时运行 systemd 的 GUI Isaac 和上述独立 launcher。若 GUI 服务正在使用，应在
 Kit Script Editor 执行：
@@ -96,6 +105,21 @@ ros2 run bridge_competition_pkg drone_interface_audit \
 
 direct 测试只允许低速、机体固定/螺旋桨安全状态；程序结束会向四电机发零。完成后必须
 重启场景回 `DRONE_BACKEND=px4`。
+
+需要验证刚体确实响应单个电机时，使用独立的动态响应票据。支架校准完成后，可以先启动
+`direct_rotor` 场景并确认稳定，再运行探针：
+
+```bash
+DRONE_BACKEND=direct_rotor ros2 run bridge_competition_pkg \
+  direct_rotor_motion_probe --ros-args \
+  -p enabled:=true -p rotor_index:=1 \
+  -p rotor_speed_rad_s:=600.0 -p pulse_seconds:=1.0
+```
+
+探针必须输出 `passed=true`；无论成功或失败都会重复发送四电机零值。该票据最高使用
+600 rad/s、1.0 秒的单电机动态脉冲，只能用于仿真且不得与 PX4 同时运行。当前支架
+零电机 12 秒票据和非锁死响应数据见
+`docs/project/prearm_support_evidence_2026-07-21.json`。
 
 ## 5. 标定参数
 

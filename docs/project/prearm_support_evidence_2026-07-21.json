@@ -1,0 +1,58 @@
+{
+  "ticket": 7,
+  "mode": "direct_rotor",
+  "payload_enabled": true,
+  "prearm_support_enabled": true,
+  "scene_log": "/home/socl/.nvidia-omniverse/logs/Kit/Isaac-Sim Full/5.1/kit_20260721_061835.log",
+  "payload_joint_at_creation": {
+    "local_position_m": [0.0, 0.0, 0.07199999999999984],
+    "translation_error_m": 0.0,
+    "rotation_error_rad": 0.0
+  },
+  "support_pads": [
+    {
+      "name": "rear",
+      "center_m": [4.551000190734864, -0.43599999612095436, 0.8085249213218864],
+      "size_m": [0.05000000698262319, 0.08200000020660336, 0.1169501478194841]
+    },
+    {
+      "name": "front",
+      "center_m": [4.551000190734864, -0.3239999950256411, 0.8085249213218864],
+      "size_m": [0.05000000698262319, 0.08200000171019484, 0.1169501478194841]
+    }
+  ],
+  "zero_motor_stability": {
+    "duration_s": 12.0,
+    "sample_count_after_settle": 280,
+    "baseline_position_m": [4.549877643585205, -0.37999746203422546, 1.129992127418518],
+    "final_position_m": [4.549849510192871, -0.3799968957901001, 1.1299893856048584],
+    "max_position_delta_m": 0.0001710959504300164,
+    "max_roll_pitch_rad": 0.0009737705389145674,
+    "max_speed_m_s": 0.014331567814987277,
+    "payload_offset_error_m": 0.000018601,
+    "payload_angle_error_rad": 0.0,
+    "side_door_closed_during_run": true,
+    "passed": true
+  },
+  "untethered_response": {
+    "rotor": 1,
+    "pulse_rad_s": 600.0,
+    "pulse_seconds": 1.0,
+    "max_position_delta_m": 0.00035471995727254344,
+    "max_attitude_delta_rad": 0.0022902421953596122,
+    "max_angular_speed_rad_s": 0.09683298003235023,
+    "four_rotors_zeroed_after_probe": true,
+    "passed": true
+  },
+  "log_gates": {
+    "payload_disjoint_warning": false,
+    "duplicate_quadrotor_01": false,
+    "invalid_physics_handle": false,
+    "exact_drone_handles_valid": true
+  },
+  "offline_tests": {
+    "command": "/home/socl/miniconda3/envs/isaacsim51/bin/python -m unittest discover -s /var/workspace/docker/isaac/scenes/active/scripts/integrated_runtime/tests -p test_runtime_geometry.py -v",
+    "tests_run": 5,
+    "passed": true
+  }
+}
