@@ -123,6 +123,9 @@ class HoverProbe(Node):
         self.actuator_saturation_threshold = float(
             self.declare_parameter("actuator_saturation_threshold", 0.95).value
         )
+        self.actuator_acceptance_timeout = float(
+            self.declare_parameter("actuator_acceptance_timeout", 0.30).value
+        )
         actuator_motors_topic = str(
             self.declare_parameter(
                 "actuator_motors_topic", "/fmu/out/actuator_motors"
@@ -190,6 +193,7 @@ class HoverProbe(Node):
             or self.landing_return_timeout <= 0.0
             or not self.landing_region.valid()
             or not 0.0 < self.actuator_saturation_threshold <= 1.0
+            or self.actuator_acceptance_timeout <= 0.0
         ):
             raise ValueError("probe durations and timeouts must be positive")
 
@@ -920,6 +924,8 @@ class HoverProbe(Node):
                 altitude_error,
                 self.raw_speed,
                 self.hold_saturation_seen,
+                self.trackers["actuator_motors"].age(now)
+                <= self.actuator_acceptance_timeout,
             ):
                 self._abort(
                     "fixed hold acceptance violated: "
@@ -992,6 +998,8 @@ class HoverProbe(Node):
                 altitude_error,
                 self.raw_speed,
                 self.hold_saturation_seen,
+                self.trackers["actuator_motors"].age(now)
+                <= self.actuator_acceptance_timeout,
             ):
                 self._abort("hover acceptance violated")
             elif self._phase_elapsed(now, use_sim_time=True) >= self.hover_seconds:

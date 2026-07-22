@@ -212,6 +212,7 @@ def hold_acceptance_passes(
     altitude_error_m: float,
     speed_mps: float,
     saturation_seen: bool,
+    actuator_feedback_fresh: bool = True,
     horizontal_tolerance_m: float = 0.10,
     altitude_tolerance_m: float = 0.05,
     max_speed_mps: float = 0.05,
@@ -222,6 +223,7 @@ def hold_acceptance_passes(
         and 0.0 <= altitude_error_m <= altitude_tolerance_m
         and 0.0 <= speed_mps <= max_speed_mps
         and not saturation_seen
+        and actuator_feedback_fresh
     )
 
 

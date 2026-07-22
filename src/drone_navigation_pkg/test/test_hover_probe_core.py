@@ -136,6 +136,9 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.051, 0.05, False))
         self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.05, 0.051, False))
         self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.05, 0.05, True))
+        self.assertFalse(
+            CORE.hold_acceptance_passes(0.10, 0.05, 0.05, False, False)
+        )
 
     def test_startup_reset_requires_disabled_loiter_disarmed_and_landed(self):
         self.assertTrue(CORE.startup_reset_ready("DISABLED", True, False, True))
