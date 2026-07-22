@@ -369,6 +369,188 @@ ExecutorSafetyAction executorSafetyAction(
   return ExecutorSafetyAction::CONTINUE;
 }
 
+bool operatorArmRequestAllowed(
+  bool have_goal,
+  bool side_door_closed,
+  bool px4_inputs_ready,
+  bool landed_known,
+  bool landed,
+  bool armed,
+  bool offboard)
+{
+  if (!have_goal || !side_door_closed || !px4_inputs_ready || !landed_known) {
+    return false;
+  }
+  const bool safe_ground_arm = landed && !armed;
+  // Land detection can remain true for several cycles after successful arming.
+  // Once PX4 reports armed+offboard, never interrupt the stream because of that lag.
+  const bool active_offboard_tracking = armed && offboard;
+  return safe_ground_arm || active_offboard_tracking;
+}
+
+bool px4DiscreteStateUsable(
+  bool state_received,
+  double continuous_transport_age_seconds,
+  double transport_timeout_seconds)
+{
+  return state_received && continuous_transport_age_seconds <= transport_timeout_seconds;
+}
+
+bool updateSideDoorClosed(bool current_state, const std::string & cargo_status)
+{
+  if (cargo_status.find("left_closed") != std::string::npos ||
+    cargo_status.find("side_closed") != std::string::npos)
+  {
+    return true;
+  }
+  if (cargo_status.find("left_opened") != std::string::npos ||
+    cargo_status.find("side_opened") != std::string::npos)
+  {
+    return false;
+  }
+  return current_state;
+}
+
+bool shouldAcceptTrajectoryUpdate(
+  bool trajectory_started,
+  bool armed,
+  bool offboard,
+  double accepted_trajectory_age_seconds,
+  double minimum_execution_seconds)
+{
+  return !trajectory_started || !armed || !offboard ||
+         accepted_trajectory_age_seconds >= minimum_execution_seconds;
+}
+
+bool shouldRequestGroundDisarm(
+  ExecutorFlightState state,
+  bool armed,
+  bool auto_land,
+  bool landed,
+  bool landed_after_latch,
+  double landed_duration_seconds,
+  double landing_state_duration_seconds,
+  double minimum_ground_delay_seconds)
+{
+  if (minimum_ground_delay_seconds < 0.0) {
+    throw std::invalid_argument("ground disarm delay must be non-negative");
+  }
+  return state == ExecutorFlightState::LAND_LATCHED && armed && auto_land && landed &&
+         landed_after_latch &&
+         landed_duration_seconds >= minimum_ground_delay_seconds &&
+         landing_state_duration_seconds >= minimum_ground_delay_seconds;
+}
+
+ExecutorRequestedMode reduceExecutorRequest(
+  ExecutorRequestedMode current,
+  ExecutorRequestedMode incoming,
+  ExecutorFlightState state)
+{
+  if (state == ExecutorFlightState::DISABLED && incoming == ExecutorRequestedMode::LAND) {
+    return ExecutorRequestedMode::DISABLED;
+  }
+  if (state == ExecutorFlightState::DISABLED && incoming == ExecutorRequestedMode::RESET) {
+    return incoming;
+  }
+  if (state == ExecutorFlightState::COMPLETE && incoming == ExecutorRequestedMode::RESET) {
+    return incoming;
+  }
+  if (current == ExecutorRequestedMode::LAND ||
+    state == ExecutorFlightState::LAND_LATCHED)
+  {
+    return ExecutorRequestedMode::LAND;
+  }
+  return incoming;
+}
+
+ExecutorLifecycleDecision ExecutorLifecycle::update(const ExecutorLifecycleInputs & inputs)
+{
+  const bool was_complete = state_ == ExecutorFlightState::COMPLETE;
+  if ((inputs.requested_mode == ExecutorRequestedMode::LAND || inputs.failsafe) &&
+    state_ != ExecutorFlightState::DISABLED && state_ != ExecutorFlightState::COMPLETE)
+  {
+    state_ = ExecutorFlightState::LAND_LATCHED;
+  }
+
+  switch (state_) {
+    case ExecutorFlightState::DISABLED:
+      if (inputs.requested_mode == ExecutorRequestedMode::ARM_TRAJECTORY) {
+        state_ = ExecutorFlightState::PRESTREAM;
+      }
+      break;
+    case ExecutorFlightState::PRESTREAM:
+      if (inputs.requested_mode == ExecutorRequestedMode::DISABLED && !inputs.armed) {
+        state_ = ExecutorFlightState::DISABLED;
+        break;
+      }
+      if (inputs.armed && inputs.offboard) {
+        state_ = ExecutorFlightState::ACTIVE;
+      }
+      break;
+    case ExecutorFlightState::ACTIVE:
+      if (inputs.requested_mode == ExecutorRequestedMode::HOLD) {
+        state_ = ExecutorFlightState::HOLD;
+      } else if (inputs.requested_mode == ExecutorRequestedMode::DISABLED) {
+        state_ = inputs.armed ? ExecutorFlightState::LAND_LATCHED :
+          ExecutorFlightState::DISABLED;
+      }
+      break;
+    case ExecutorFlightState::HOLD:
+      if ((inputs.requested_mode == ExecutorRequestedMode::TRAJECTORY ||
+        inputs.requested_mode == ExecutorRequestedMode::VISUAL) && inputs.armed)
+      {
+        state_ = ExecutorFlightState::ACTIVE;
+      } else if (inputs.requested_mode == ExecutorRequestedMode::DISABLED) {
+        state_ = inputs.armed ? ExecutorFlightState::LAND_LATCHED :
+          ExecutorFlightState::DISABLED;
+      }
+      break;
+    case ExecutorFlightState::LAND_LATCHED:
+      if (inputs.landed_known && inputs.landed && !inputs.armed) {
+        state_ = ExecutorFlightState::COMPLETE;
+      }
+      break;
+    case ExecutorFlightState::COMPLETE:
+      if (was_complete && inputs.requested_mode == ExecutorRequestedMode::RESET &&
+        inputs.landed_known && inputs.landed && !inputs.armed)
+      {
+        state_ = ExecutorFlightState::DISABLED;
+      }
+      break;
+  }
+
+  ExecutorLifecycleDecision decision;
+  decision.state = state_;
+  switch (state_) {
+    case ExecutorFlightState::PRESTREAM:
+      decision.stream_offboard = true;
+      decision.request_offboard = inputs.prestream_complete && !inputs.offboard;
+      decision.request_arm = inputs.prestream_complete && inputs.offboard && !inputs.armed;
+      break;
+    case ExecutorFlightState::ACTIVE:
+    case ExecutorFlightState::HOLD:
+      decision.stream_offboard = inputs.armed && !inputs.failsafe;
+      break;
+    case ExecutorFlightState::LAND_LATCHED:
+      decision.stream_offboard = inputs.armed && !inputs.auto_land && !inputs.failsafe;
+      decision.request_land = inputs.armed && !inputs.auto_land;
+      break;
+    case ExecutorFlightState::DISABLED:
+    case ExecutorFlightState::COMPLETE:
+      break;
+  }
+  decision.request_loiter =
+    inputs.requested_mode == ExecutorRequestedMode::RESET &&
+    state_ == ExecutorFlightState::DISABLED && inputs.landed_known &&
+    inputs.landed && !inputs.armed && !inputs.auto_loiter;
+  return decision;
+}
+
+ExecutorFlightState ExecutorLifecycle::state() const
+{
+  return state_;
+}
+
 VoxelPlanner::VoxelPlanner(PlannerConfig config)
 : config_(config)
 {
@@ -625,7 +807,7 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
     inputs.odometry_age_seconds, inputs.pointcloud_age_seconds);
 
   if (inputs.px4_failsafe && (airborne_phase || phase_ == FlightPhase::HOLD)) {
-    phase_ = FlightPhase::HOLD;
+    phase_ = FlightPhase::LAND;
     decision.phase = phase_;
     decision.request_land = true;
     decision.reason = "PX4 failsafe active";
@@ -635,7 +817,7 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
   if ((airborne_phase || phase_ == FlightPhase::HOLD) &&
     worst_data_age > inputs.land_timeout_seconds)
   {
-    phase_ = FlightPhase::HOLD;
+    phase_ = FlightPhase::LAND;
     decision.phase = phase_;
     decision.request_land = true;
     decision.reason = "odometry or point cloud missing for more than 1 second";
@@ -700,7 +882,7 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
       break;
     case FlightPhase::LAND:
       decision.request_land = true;
-      if (inputs.landed) {
+      if (inputs.landed && !inputs.armed) {
         phase_ = FlightPhase::COMPLETE;
       }
       break;

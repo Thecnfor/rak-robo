@@ -2,10 +2,11 @@
 
 ## 当前交付状态
 
-代码、消息、launch、Docker 外部模拟器模式和离线测试已落地。正式飞行仍有四个必须
-完成的门槛：取得可达的指定 EGO commit 并移植 raycast/LBFGS、接口票据、投放区
-`drop_search_pose`、下视相机朝向/PID。
-在这些票据通过前保持 `mission_autostart=false`，不要解锁。
+代码、消息、launch、Docker 外部模拟器模式、接口票据和可见无人机受控起降已经落地。
+2026-07-22 的多次受控实飞完成 Offboard 预流、解锁、物理离架、HOLD、AUTO_LAND、落地和
+自动解除武装；最新 `round1i` 使用全部安全修复后的构建并返回 `success=true`。正式验收仍需 1.8 m/30 s 悬停、速度收敛
+调参、EGO 障碍/返航、投放区 `drop_search_pose` 和下视相机 PID。保持
+`mission_autostart=false`，只通过安全探针分阶段放飞。
 
 ## 1. 环境
 
@@ -144,8 +145,21 @@ ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py
 ```
 
 bringup 启动四个导航节点、视觉检测、地空协调和接口审计；Foxglove（8765）由独立
-tmux daemon 常驻。默认不会自动解锁；只有 `/arena/ground/state` 为
+systemd user service 常驻。默认不会自动解锁；只有 `/arena/ground/state` 为
 `COMPLETE|SUCCESS|GROUND_DONE` 后 orchestrator 才发一次任务请求。
+
+### Foxglove 3D 只看无人机
+
+3D 面板出现大量 `left_gripper_*`、`wheel_link` 文本和重叠坐标轴，是 Foxglove 把整台
+X1 的 `/tf` frame 名称全部显示出来，不代表无人机模型或 TF 树散架。面板按以下方式配置：
+
+1. `Fixed frame` 设为 `map`，跟随 frame 设为 `avoidance_base_link`。
+2. 在 `Transforms` 中关闭全局 `Labels` 和 `Axes`；需要核对时只临时打开
+   `avoidance_base_link`、`avoidance_lidar`。
+3. 只保留 `/avoidance/lidar/pointcloud`、`/drone/navigation/planned_path` 和无人机
+   odometry/pose，隐藏地面机器人 `RobotState`/TF 可视项。
+
+这样只改变显示层，不修改 ROS topic、TF 发布者或飞控坐标系。
 
 ## 7. 分阶段放飞
 
@@ -158,7 +172,14 @@ tmux daemon 常驻。默认不会自动解锁；只有 `/arena/ground/state` 为
 5. 视觉：粗搜索位、稳定 0.8 s、水平速度 <0.05 m/s、开底舱。
 6. 完整任务：关侧门→起飞→避障→对准→投放→返航→降落。
 
-任何 odometry/点云超过 0.3 s 会 HOLD，超过 1.0 s 或 PX4 failsafe 请求 Land。
+实测 RTX 负载下 PX4 odometry wall-time 间隔 p99 为 0.38 s，因此当前超过 0.60 s 进入
+HOLD，超过 1.20 s 或 PX4 failsafe 请求 Land。轨迹进度和试飞阶段超时使用 `/clock`；
+传输失联保护使用 steady wall time。
+
+`LAND`/`ABORT` 会锁存终端降落状态；`CLEAR` 只清除普通操作意图，不解除该安全锁。
+确认 PX4 已落地并解除武装后，必须显式发送 `RESET` 才能开始下一轮。
+安全探针会在每轮开始自动执行这项 RESET 握手，并要求 executor=`DISABLED`、PX4
+`AUTO_LOITER`、未解锁及支架上静稳后才进入 preflight。
 
 ## 8. 验收证据
 
@@ -166,3 +187,6 @@ tmux daemon 常驻。默认不会自动解锁；只有 `/arena/ground/state` 为
 - 投放至少 90% 静止落点距圆心 ≤0.2 m。
 - 保存 `/tmp/drone_interface_report.json`、rosbag、ULog、状态机日志、规划轨迹和全程视频。
 - 接口/标定不通过时，不能以“节点已启动”替代比赛验收。
+- 当前受控起降基线见
+  `docs/project/drone_hover_evidence_2026-07-22.json`；它证明“真实能飞”，不替代正式
+  1.8 m/30 s 和 10 次连续完整流程验收。

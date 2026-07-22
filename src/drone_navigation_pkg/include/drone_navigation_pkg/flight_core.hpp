@@ -64,6 +64,98 @@ ExecutorSafetyAction executorSafetyAction(
   double hold_timeout_seconds,
   double land_timeout_seconds);
 
+bool operatorArmRequestAllowed(
+  bool have_goal,
+  bool side_door_closed,
+  bool px4_inputs_ready,
+  bool landed_known,
+  bool landed,
+  bool armed,
+  bool offboard);
+
+bool px4DiscreteStateUsable(
+  bool state_received,
+  double continuous_transport_age_seconds,
+  double transport_timeout_seconds);
+
+bool updateSideDoorClosed(bool current_state, const std::string & cargo_status);
+
+bool shouldAcceptTrajectoryUpdate(
+  bool trajectory_started,
+  bool armed,
+  bool offboard,
+  double accepted_trajectory_age_seconds,
+  double minimum_execution_seconds);
+
+enum class ExecutorRequestedMode
+{
+  DISABLED,
+  ARM_TRAJECTORY,
+  TRAJECTORY,
+  HOLD,
+  VISUAL,
+  LAND,
+  RESET,
+};
+
+enum class ExecutorFlightState
+{
+  DISABLED,
+  PRESTREAM,
+  ACTIVE,
+  HOLD,
+  LAND_LATCHED,
+  COMPLETE,
+};
+
+bool shouldRequestGroundDisarm(
+  ExecutorFlightState state,
+  bool armed,
+  bool auto_land,
+  bool landed,
+  bool landed_after_latch,
+  double landed_duration_seconds,
+  double landing_state_duration_seconds,
+  double minimum_ground_delay_seconds);
+
+ExecutorRequestedMode reduceExecutorRequest(
+  ExecutorRequestedMode current,
+  ExecutorRequestedMode incoming,
+  ExecutorFlightState state);
+
+struct ExecutorLifecycleInputs
+{
+  ExecutorRequestedMode requested_mode{ExecutorRequestedMode::DISABLED};
+  bool prestream_complete{false};
+  bool armed{false};
+  bool offboard{false};
+  bool auto_land{false};
+  bool auto_loiter{false};
+  bool landed_known{false};
+  bool landed{true};
+  bool failsafe{false};
+};
+
+struct ExecutorLifecycleDecision
+{
+  ExecutorFlightState state{ExecutorFlightState::DISABLED};
+  bool stream_offboard{false};
+  bool request_offboard{false};
+  bool request_arm{false};
+  bool request_land{false};
+  bool request_loiter{false};
+};
+
+class ExecutorLifecycle
+{
+public:
+  ExecutorLifecycleDecision update(const ExecutorLifecycleInputs & inputs);
+  ExecutorFlightState state() const;
+
+private:
+  ExecutorFlightState state_{ExecutorFlightState::DISABLED};
+};
+
 struct PlannerConfig
 {
   double resolution{0.10};

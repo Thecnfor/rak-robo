@@ -63,13 +63,22 @@ install(TARGETS flight_core
 install(TARGETS
   px4_state_adapter ego_local_planner trajectory_executor flight_supervisor
   DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/px4_hover_probe.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME px4_hover_probe)
+install(FILES scripts/hover_probe_core.py
+  DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   ament_add_gtest(test_flight_core test/test_flight_core.cpp)
   target_link_libraries(test_flight_core flight_core)
+  add_test(
+    NAME test_hover_probe_core
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_hover_probe_core.py)
 endif()
 
 ament_export_include_directories(include)

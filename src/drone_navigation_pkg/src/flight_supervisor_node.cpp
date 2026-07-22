@@ -96,7 +96,9 @@ public:
       std::bind(&FlightSupervisorNode::onOdometry, this, std::placeholders::_1));
     pointcloud_subscription_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/avoidance/lidar/pointcloud", rclcpp::SensorDataQoS(),
-      [this](const sensor_msgs::msg::PointCloud2::SharedPtr) {last_pointcloud_time_ = now();});
+      [this](const sensor_msgs::msg::PointCloud2::SharedPtr) {
+        last_pointcloud_time_ = steadyNow();
+      });
     target_subscription_ = create_subscription<std_msgs::msg::Float32MultiArray>(
       "/drone/drop_target_offset", rclcpp::QoS(10),
       std::bind(&FlightSupervisorNode::onTargetOffset, this, std::placeholders::_1));
@@ -105,6 +107,8 @@ public:
   }
 
 private:
+  using SteadyTime = std::chrono::steady_clock::time_point;
+
   static bool contains(const std::string & text, const std::string & token)
   {
     return text.find(token) != std::string::npos;
@@ -127,10 +131,14 @@ private:
       operator_mode_.reset();
       return;
     }
-    if (message->data == "TRAJECTORY" || message->data == "RETURN" ||
-      message->data == "HOLD" || message->data == "LAND")
+    if (message->data == "ARM_OFFBOARD" || message->data == "TRAJECTORY" ||
+      message->data == "RETURN" || message->data == "HOLD" ||
+      message->data == "LAND" || message->data == "RESET")
     {
       operator_mode_ = message->data;
+      if (message->data == "LAND") {
+        operator_land_latched_ = true;
+      }
     } else {
       RCLCPP_WARN(get_logger(), "Rejected unknown operator mode %s", message->data.c_str());
     }
@@ -138,8 +146,7 @@ private:
 
   void onCargoStatus(const std_msgs::msg::String::SharedPtr message)
   {
-    side_door_closed_ = contains(message->data, "left_closed") ||
-      contains(message->data, "side_closed");
+    side_door_closed_ = updateSideDoorClosed(side_door_closed_, message->data);
     payload_released_ = payload_released_ || contains(message->data, "payload_released");
   }
 
@@ -149,6 +156,7 @@ private:
     armed_ = contains(message->data, "armed=true");
     offboard_ = contains(message->data, "offboard=true");
     px4_failsafe_ = contains(message->data, "failsafe=true");
+    have_px4_status_ = true;
   }
 
   void onOdometry(const nav_msgs::msg::Odometry::SharedPtr message)
@@ -161,7 +169,7 @@ private:
       message->twist.twist.linear.x,
       message->twist.twist.linear.y,
       message->twist.twist.linear.z};
-    last_odometry_time_ = now();
+    last_odometry_time_ = steadyNow();
     if (!have_home_ && !armed_) {
       home_ = current_position_;
       have_home_ = true;
@@ -178,15 +186,20 @@ private:
     target_visible_ = true;
     target_nx_ = message->data[0];
     target_ny_ = message->data[1];
-    last_target_time_ = now();
+    last_target_time_ = steadyNow();
   }
 
-  double ageOrInfinity(const rclcpp::Time & stamp) const
+  static SteadyTime steadyNow()
   {
-    if (stamp.nanoseconds() == 0) {
+    return std::chrono::steady_clock::now();
+  }
+
+  static double ageOrInfinity(const SteadyTime & stamp)
+  {
+    if (stamp.time_since_epoch().count() == 0) {
       return std::numeric_limits<double>::infinity();
     }
-    return (now() - stamp).seconds();
+    return std::chrono::duration<double>(steadyNow() - stamp).count();
   }
 
   bool near(const Vec3 & target) const
@@ -219,7 +232,12 @@ private:
     const bool navigation_inputs_ready = have_home_ &&
       ageOrInfinity(last_odometry_time_) <= hold_timeout_ &&
       ageOrInfinity(last_pointcloud_time_) <= hold_timeout_;
-    inputs.px4_ready = px4_ready_ && !px4_failsafe_ && navigation_inputs_ready;
+    // VehicleStatus is event-driven in PX4, not a heartbeat. Couple the cached
+    // discrete state to continuously arriving vehicle odometry instead.
+    const bool px4_state_usable = px4DiscreteStateUsable(
+      have_px4_status_, ageOrInfinity(last_odometry_time_), hold_timeout_);
+    inputs.px4_ready =
+      px4_ready_ && !px4_failsafe_ && px4_state_usable && navigation_inputs_ready;
     inputs.armed = armed_;
     inputs.offboard = offboard_;
     inputs.px4_failsafe = px4_failsafe_;
@@ -238,18 +256,46 @@ private:
     // The pure core owns all safety transitions. ROS commands below are projections of its decision.
     auto decision = supervisor_.update(inputs);
     const bool operator_override = operator_mode_.has_value();
+    const double worst_navigation_age = std::max(
+      ageOrInfinity(last_odometry_time_), ageOrInfinity(last_pointcloud_time_));
+    const bool operator_airborne = operator_override &&
+      (armed_ || (have_landed_status_ && !landed_));
+    if (operator_airborne &&
+      (px4_failsafe_ || worst_navigation_age > land_timeout_))
+    {
+      operator_land_latched_ = true;
+    }
+    const bool operator_arm_allowed = operator_override &&
+      *operator_mode_ == "ARM_OFFBOARD" && operatorArmRequestAllowed(
+      have_operator_goal_, side_door_closed_, inputs.px4_ready,
+      have_landed_status_, landed_, armed_, offboard_);
     if (!operator_override && decision.command_close_side_door) {
       publishString(cargo_command_publisher_, "left_close");
     }
     if (!operator_override && decision.command_open_bottom_door) {
       publishString(cargo_command_publisher_, "bottom_open");
     }
-    if (operator_override) {
-      publishOperatorOverride();
-    } else if (decision.request_land) {
+    if (decision.request_land) {
       publishString(control_mode_publisher_, "LAND");
     } else if (decision.hold_position) {
       publishString(control_mode_publisher_, "HOLD");
+    } else if (operator_land_latched_) {
+      if (operator_override && *operator_mode_ == "RESET" &&
+        have_landed_status_ && landed_ && !armed_)
+      {
+        publishString(control_mode_publisher_, "RESET");
+        operator_land_latched_ = false;
+      } else {
+        publishString(control_mode_publisher_, "LAND");
+      }
+    } else if (operator_airborne && worst_navigation_age > hold_timeout_) {
+      publishString(control_mode_publisher_, "HOLD");
+    } else if (operator_override && *operator_mode_ == "ARM_OFFBOARD" &&
+      !operator_arm_allowed)
+    {
+      publishString(control_mode_publisher_, "DISABLED");
+    } else if (operator_override) {
+      publishOperatorOverride();
     } else {
       publishControlHeartbeat(decision.phase);
     }
@@ -275,6 +321,15 @@ private:
 
   void publishOperatorOverride()
   {
+    if (*operator_mode_ == "ARM_OFFBOARD") {
+      if (have_operator_goal_) {
+        publishGoal(operator_goal_);
+        publishString(control_mode_publisher_, "ARM_OFFBOARD");
+      } else {
+        publishString(control_mode_publisher_, "DISABLED");
+      }
+      return;
+    }
     if (*operator_mode_ == "TRAJECTORY") {
       if (have_operator_goal_) {
         publishGoal(operator_goal_);
@@ -291,6 +346,10 @@ private:
       } else {
         publishString(control_mode_publisher_, "HOLD");
       }
+      return;
+    }
+    if (*operator_mode_ == "RESET") {
+      publishString(control_mode_publisher_, "RESET");
       return;
     }
     publishString(control_mode_publisher_, *operator_mode_);
@@ -444,6 +503,7 @@ private:
   bool ground_complete_{false};
   bool side_door_closed_{false};
   bool px4_ready_{false};
+  bool have_px4_status_{false};
   bool px4_failsafe_{false};
   bool armed_{false};
   bool offboard_{false};
@@ -453,11 +513,12 @@ private:
   bool target_visible_{false};
   bool payload_released_{false};
   bool have_operator_goal_{false};
+  bool operator_land_latched_{false};
   double target_nx_{0.0};
   double target_ny_{0.0};
-  rclcpp::Time last_odometry_time_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_pointcloud_time_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_target_time_{0, 0, RCL_ROS_TIME};
+  SteadyTime last_odometry_time_{};
+  SteadyTime last_pointcloud_time_{};
+  SteadyTime last_target_time_{};
   std::optional<rclcpp::Time> aligned_since_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_publisher_;

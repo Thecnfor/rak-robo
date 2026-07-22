@@ -66,6 +66,7 @@ uXRCE-DDS 按 `px4_msgs/*.msg` 的 `MESSAGE_VERSION` 决定是否给 topic 加 `
 `trajectory_executor_node.cpp`）直接订阅 `vehicle_status_v1`，不在 launch 层 remap。
 | PX4 → host | host → PX4 |
 |---|---|
+| `/fmu/out/sensor_combined` | （只读估计器输入健康票据） |
 | `/fmu/out/vehicle_odometry` | `/fmu/in/offboard_control_mode` |
 | `/fmu/out/vehicle_status_v1` (MESSAGE_VERSION=1) | `/fmu/in/trajectory_setpoint` |
 | `/fmu/out/vehicle_command_ack` | `/fmu/in/vehicle_command` |
@@ -97,7 +98,8 @@ IDLE → PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH
 → VISUAL_ALIGN → DROP_HOLD → RETURN → LAND → COMPLETE
 ```
 
-数据陈旧或 PX4 failsafe 进入 `HOLD`：0.3 秒悬停，1.0 秒请求 PX4 Land。
+数据陈旧或 PX4 failsafe 进入 `HOLD`：0.60 秒悬停，1.20 秒请求 PX4 Land。
+安全新鲜度使用 steady wall time；轨迹采样使用 `/clock`。
 
 ## 视觉、舱门和地空协调
 

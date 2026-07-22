@@ -67,9 +67,29 @@ gate bypasses?
 
 ### Answer
 
-Open. The current `99999` EKF/GPS gates and disabled GPS position failsafe are not
-accepted as a solution; they hide estimator-health failures and must be replaced
-by a documented sensor/estimator configuration.
+Resolved on 2026-07-22.
+
+- Pegasus supplies IMU, magnetometer, barometer and GNSS through Simulator
+  MAVLink. The same run exposed raw ROS observer streams and PX4
+  `sensor_combined`/`vehicle_odometry` at about 5.2 Hz while `/clock` ran at about
+  3.2 Hz wall rate.
+- The Docker startup no longer edits generated PX4 startup files. Its only PX4
+  parameter override is `UXRCE_DDS_SYNCT=0`, which is a simulation-time policy.
+  Live PX4 values were the normal gates (`EKF2_BARO_GATE=5`,
+  `EKF2_GPS_P_GATE=5`, `EKF2_MAG_GATE=3`, `EKF2_REQ_EPH=3`,
+  `EKF2_REQ_EPV=5`); no `99999` estimator gate remained.
+- PX4 reported `pre_flight_checks_pass=true` and `failsafe=false` through two
+  visible-drone flights. Isaac pose, PX4 odometry, Offboard setpoints, actuator
+  output and motor-driven motion were recorded together.
+- The successful-run ULog had `filter_fault_flags=0`, `time_slip=0`; maximum
+  heading/velocity/position/height test ratios were respectively
+  0.0762/0.3606/0.0111/0.0447. GNSS position/velocity, barometer height and
+  magnetometer aid sources had zero rejected samples. Evidence includes SHA-256
+  hashes and all five PX4 command ACK results (`result=0`).
+
+The measured simulator real-time factor was only 0.0513. Flight trajectory
+progress therefore uses `/clock`; transport freshness remains on steady wall
+time so a stalled simulator still enters HOLD/LAND.
 
 ## #4: What is the flight-control contract after EGO?
 
@@ -85,8 +105,11 @@ the Offboard executor enforce before it can arm or replace an active trajectory?
 
 Partially resolved: EGO remains the planner and PX4 Offboard remains the control
 boundary. Position, velocity, acceleration and yaw stay in the existing trajectory
-contract. Validation, interpolation, command ACK handling and restart semantics
-remain to be fixed after the estimator timebase is known.
+contract. The executor now owns an explicit prestream/active/hold/land/complete
+lifecycle, enforces a single writer for the three contracted Offboard inputs, samples trajectories in simulation
+time, and prevents the rolling planner from restarting the slow beginning of a
+takeoff spline more often than every 4 simulated seconds. Collision-triggered
+priority replacement and full command-ACK policy remain open before obstacle runs.
 
 ## #5: What does HOLD mean operationally?
 
@@ -100,9 +123,13 @@ control to PX4 Land instead of continuing Offboard?
 
 ### Answer
 
-Open. Acceptance must use measured position/velocity bounds; a supervisor `HOLD`
-string is not sufficient. The current run is PX4 `AUTO_LAND` while the supervisor
-reports HOLD, so mode truth and mission intent must be reconciled.
+Resolved for the controlled-hover slice on 2026-07-22. HOLD captures a world-frame
+position and keeps the Offboard stream alive. LAND is terminal until PX4 reports
+AUTO_LAND, landed and disarmed. Because PX4 did not auto-disarm reliably, the sole
+executor now sends DISARM only after both LAND_LATCHED and landed have remained
+true for two steady-wall seconds. The successful run showed HOLD while PX4 was
+Offboard, followed by LAND_LATCHED while PX4 was AUTO_LAND; there was no longer a
+HOLD/AUTO_LAND truth mismatch.
 
 ## #6: What evidence closes the flight-control milestone?
 
@@ -116,9 +143,17 @@ the Visible Competition Drone is ready to reconnect to the full mission?
 
 ### Answer
 
-Open. The final ticket will define synchronized Isaac pose, PX4 state, setpoint,
-actuator and video evidence plus numeric tolerances and repeat counts. M9.4 remains
-open until those checks pass.
+Partially resolved. Synchronized visible-drone runs now prove physical takeoff,
+hover intent, AUTO_LAND, touchdown and automatic disarm. The latest `round1i` used
+the final safety build and returned `success=true`; exact state/command sequences,
+errors, bag and ULog paths
+are recorded in
+[`drone_hover_evidence_2026-07-22.json`](drone_hover_evidence_2026-07-22.json).
+
+M9.4 remains open for the formal 1.8 m / 30 s hover because the current runs were
+deliberately limited to z=1.30/1.45 m. `round1i` held within 0.0901 m horizontally
+but still reached 0.0827 m/s and displaced 0.2756 m during landing. The next ticket
+is speed-settling/controller and landing calibration, then 1.8 m / 30 s and repeat trials.
 
 ## #7: What keeps the drone valid before arming?
 

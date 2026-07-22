@@ -9,12 +9,18 @@
     local_horizontal_range: 5.5
     local_vertical_range: 4.5
     virtual_ceiling: 2.9
-    max_velocity: 0.5
-    max_acceleration: 1.0
+    max_velocity: 0.3
+    max_acceleration: 0.6
     takeoff_height: 1.8
-    odometry_hold_timeout: 0.3
-    data_land_timeout: 1.0
+    # PX4 external-sim odometry is nominally 5 Hz but showed 0.38 s p99 wall
+    # gaps under RTX load. Keep HOLD above that jitter while LAND remains 1.2 s.
+    odometry_hold_timeout: 0.60
+    data_land_timeout: 1.2
     offboard_prestream_seconds: 1.0
+    # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
+    # rolling replanner repeatedly restart it before meaningful progress.
+    minimum_replan_execution_seconds: 4.0
+    ground_disarm_delay_seconds: 2.0
     px4_map_origin: [4.55, -0.38, 1.13]
     mission_autostart: false
     drop_search_pose: [0.0, 0.0, 1.8]

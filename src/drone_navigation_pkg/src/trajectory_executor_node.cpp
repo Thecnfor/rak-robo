@@ -19,6 +19,7 @@
 #include "px4_msgs/msg/offboard_control_mode.hpp"
 #include "px4_msgs/msg/trajectory_setpoint.hpp"
 #include "px4_msgs/msg/vehicle_command.hpp"
+#include "px4_msgs/msg/vehicle_land_detected.hpp"
 #include "px4_msgs/msg/vehicle_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -36,8 +37,18 @@ public:
     prestream_seconds_ = declare_parameter<double>("offboard_prestream_seconds", 1.0);
     hold_timeout_ = declare_parameter<double>("odometry_hold_timeout", 0.3);
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
+    minimum_replan_execution_seconds_ = declare_parameter<double>(
+      "minimum_replan_execution_seconds", 1.0);
+    ground_disarm_delay_seconds_ = declare_parameter<double>(
+      "ground_disarm_delay_seconds", 2.0);
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
       throw std::runtime_error("executor watchdog timeouts must be non-negative and ordered");
+    }
+    if (minimum_replan_execution_seconds_ < 0.0) {
+      throw std::runtime_error("minimum replan execution time must be non-negative");
+    }
+    if (ground_disarm_delay_seconds_ < 0.0) {
+      throw std::runtime_error("ground disarm delay must be non-negative");
     }
     const auto origin = declare_parameter<std::vector<double>>(
       "px4_map_origin", {4.55, -0.38, 1.13});
@@ -71,12 +82,16 @@ public:
     status_subscription_ = create_subscription<px4_msgs::msg::VehicleStatus>(
       "/fmu/out/vehicle_status_v1", px4_qos,
       std::bind(&TrajectoryExecutorNode::onVehicleStatus, this, std::placeholders::_1));
+    land_subscription_ = create_subscription<px4_msgs::msg::VehicleLandDetected>(
+      "/fmu/out/vehicle_land_detected", px4_qos,
+      std::bind(&TrajectoryExecutorNode::onLandDetected, this, std::placeholders::_1));
     timer_ = create_wall_timer(
       std::chrono::milliseconds(50), std::bind(&TrajectoryExecutorNode::tick, this));
   }
 
 private:
   enum class Mode {DISABLED, TRAJECTORY, HOLD, VISUAL, LAND};
+  using SteadyTime = std::chrono::steady_clock::time_point;
 
   static double durationSeconds(const builtin_interfaces::msg::Duration & duration)
   {
@@ -101,9 +116,18 @@ private:
       publishState("REJECTED empty_trajectory");
       return;
     }
+    last_trajectory_ = steadyNow();
+    const double accepted_trajectory_age = trajectory_started_ ?
+      std::max(0.0, (now() - trajectory_start_).seconds()) :
+      std::numeric_limits<double>::infinity();
+    if (!shouldAcceptTrajectoryUpdate(
+        trajectory_started_, armed_, offboard_, accepted_trajectory_age,
+        minimum_replan_execution_seconds_))
+    {
+      return;
+    }
     trajectory_ = *message;
     have_trajectory_ = true;
-    last_trajectory_ = now();
     trajectory_started_ = armed_ && offboard_;
     if (trajectory_started_) {
       trajectory_start_ = now();
@@ -115,47 +139,78 @@ private:
   {
     const std::string requested = message->data;
     Mode new_mode = Mode::DISABLED;
-    if (requested == "ARM_OFFBOARD" || requested == "TRAJECTORY" || requested == "TAKEOFF" ||
-      requested == "RETURN")
-    {
+    ExecutorRequestedMode new_request = ExecutorRequestedMode::DISABLED;
+    if (requested == "ARM_OFFBOARD") {
+      if (lifecycle_.state() == ExecutorFlightState::DISABLED) {
+        const bool fresh_inputs = have_odometry_ && have_trajectory_ &&
+          ageOrInfinity(last_odometry_) <= hold_timeout_ &&
+          ageOrInfinity(last_trajectory_) <= hold_timeout_ &&
+          px4DiscreteStateUsable(have_status_, ageOrInfinity(last_odometry_), hold_timeout_);
+        if (!fresh_inputs || !px4_ready_ || failsafe_ || !landed_known_ || !landed_ || armed_) {
+          publishState("REJECTED arm_preflight_gate");
+          return;
+        }
+      }
       new_mode = Mode::TRAJECTORY;
+      new_request = ExecutorRequestedMode::ARM_TRAJECTORY;
+    } else if (requested == "TRAJECTORY" || requested == "TAKEOFF" || requested == "RETURN") {
+      new_mode = Mode::TRAJECTORY;
+      new_request = ExecutorRequestedMode::TRAJECTORY;
     } else if (requested == "HOLD" || requested == "TARGET_SEARCH" || requested == "DROP_HOLD") {
       new_mode = Mode::HOLD;
+      new_request = ExecutorRequestedMode::HOLD;
     } else if (requested == "VISUAL") {
       new_mode = Mode::VISUAL;
+      new_request = ExecutorRequestedMode::VISUAL;
     } else if (requested == "LAND") {
       new_mode = Mode::LAND;
-    } else if (requested == "ABORT" || requested == "DISABLED") {
+      new_request = ExecutorRequestedMode::LAND;
+    } else if (requested == "ABORT") {
+      new_mode = Mode::LAND;
+      new_request = ExecutorRequestedMode::LAND;
+    } else if (requested == "RESET") {
       new_mode = Mode::DISABLED;
+      new_request = ExecutorRequestedMode::RESET;
+    } else if (requested == "DISABLED") {
+      new_mode = Mode::DISABLED;
+      new_request = ExecutorRequestedMode::DISABLED;
     } else {
       publishState("REJECTED unknown_mode=" + requested);
       return;
     }
 
-    last_control_intent_ = now();
+    last_control_intent_ = steadyNow();
+
+    const auto reduced_request = reduceExecutorRequest(
+      requested_mode_, new_request, lifecycle_.state());
+    if (reduced_request != new_request) {
+      publishState("IGNORED terminal_landing_latch mode=" + requested);
+      return;
+    }
+    new_request = reduced_request;
 
     if (new_mode != mode_) {
       if (new_mode == Mode::HOLD && have_odometry_) {
         hold_position_ = current_position_;
       }
-      if (new_mode == Mode::LAND) {
-        land_command_sent_ = false;
-      }
-      if (mode_ == Mode::DISABLED && new_mode != Mode::DISABLED && new_mode != Mode::LAND) {
-        prestream_started_ = now();
-        mode_command_sent_ = false;
-        arm_command_sent_ = false;
+      if (new_request == ExecutorRequestedMode::ARM_TRAJECTORY) {
+        prestream_started_ = steadyNow();
       }
       mode_ = new_mode;
       publishState("MODE " + requested);
     }
+    if (new_request == ExecutorRequestedMode::RESET) {
+      have_trajectory_ = false;
+      trajectory_started_ = false;
+    }
+    requested_mode_ = new_request;
   }
 
   void onVisualVelocity(const geometry_msgs::msg::TwistStamped::SharedPtr message)
   {
     visual_velocity_ = {
       message->twist.linear.x, message->twist.linear.y, message->twist.linear.z};
-    last_visual_velocity_ = now();
+    last_visual_velocity_ = steadyNow();
   }
 
   void onOdometry(const nav_msgs::msg::Odometry::SharedPtr message)
@@ -168,105 +223,163 @@ private:
       hold_position_ = current_position_;
     }
     have_odometry_ = true;
-    last_odometry_ = now();
+    last_odometry_ = steadyNow();
   }
 
   void onVehicleStatus(const px4_msgs::msg::VehicleStatus::SharedPtr message)
   {
     armed_ = message->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
     offboard_ = message->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD;
+    auto_land_ = message->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LAND;
+    auto_loiter_ =
+      message->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_LOITER;
+    px4_ready_ = message->pre_flight_checks_pass;
     failsafe_ = message->failsafe;
+    have_status_ = true;
     if (have_trajectory_ && armed_ && offboard_ && !trajectory_started_) {
       trajectory_start_ = now();
       trajectory_started_ = true;
     }
   }
 
+  void onLandDetected(const px4_msgs::msg::VehicleLandDetected::SharedPtr message)
+  {
+    landed_known_ = true;
+    if (message->landed && !landed_) {
+      landed_since_ = steadyNow();
+    } else if (!message->landed) {
+      landed_since_ = {};
+    }
+    landed_ = message->landed;
+  }
+
   void tick()
   {
-    if (mode_ == Mode::DISABLED) {
-      return;
-    }
-    if (mode_ == Mode::LAND) {
-      if (!land_command_sent_) {
-        publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_LAND);
-        land_command_sent_ = true;
-        publishState("LAND_COMMAND_SENT");
-      }
-      return;
-    }
+    const auto lifecycle_state = lifecycle_.state();
+    const bool watchdog_active = lifecycle_state == ExecutorFlightState::PRESTREAM ||
+      lifecycle_state == ExecutorFlightState::ACTIVE ||
+      lifecycle_state == ExecutorFlightState::HOLD;
     if (!have_odometry_) {
-      if (armed_ || offboard_) {
-        enterLand("WATCHDOG no_odometry_while_active");
+      if (armed_ || offboard_ || watchdog_active) {
+        requested_mode_ = ExecutorRequestedMode::LAND;
+        publishState("WAITING_FOR_ODOMETRY");
       }
-      publishState("WAITING_FOR_ODOMETRY");
-      return;
-    }
-    if (failsafe_) {
-      publishState("PX4_FAILSAFE");
-      return;
-    }
-
-    const bool trajectory_expected =
-      mode_ == Mode::TRAJECTORY && armed_ && offboard_;
-    const auto safety_action = executorSafetyAction(
-      trajectory_expected,
-      ageOrInfinity(last_odometry_),
-      ageOrInfinity(last_control_intent_),
-      ageOrInfinity(last_trajectory_),
-      hold_timeout_,
-      land_timeout_);
-    if (safety_action == ExecutorSafetyAction::LAND) {
-      enterLand("WATCHDOG stale_input_land");
-      return;
-    }
-    if (safety_action == ExecutorSafetyAction::HOLD) {
-      if (mode_ != Mode::HOLD) {
+    } else if (watchdog_active) {
+      const bool trajectory_expected =
+        mode_ == Mode::TRAJECTORY && armed_ && offboard_;
+      const auto safety_action = executorSafetyAction(
+        trajectory_expected,
+        ageOrInfinity(last_odometry_),
+        ageOrInfinity(last_control_intent_),
+        ageOrInfinity(last_trajectory_),
+        hold_timeout_,
+        land_timeout_);
+      if (safety_action == ExecutorSafetyAction::LAND) {
+        requested_mode_ = ExecutorRequestedMode::LAND;
+        mode_ = Mode::LAND;
+        publishState("WATCHDOG stale_input_land");
+      } else if (safety_action == ExecutorSafetyAction::HOLD && mode_ != Mode::HOLD) {
         hold_position_ = current_position_;
+        requested_mode_ = ExecutorRequestedMode::HOLD;
         mode_ = Mode::HOLD;
         publishState("WATCHDOG stale_input_hold");
       }
     }
 
-    publishOffboardControlMode(mode_ == Mode::VISUAL);
-    publishSetpoint();
+    ExecutorLifecycleInputs inputs;
+    inputs.requested_mode = requested_mode_;
+    inputs.prestream_complete = ageOrInfinity(prestream_started_) >= prestream_seconds_;
+    inputs.armed = armed_;
+    inputs.offboard = offboard_;
+    inputs.auto_land = auto_land_;
+    inputs.auto_loiter = auto_loiter_;
+    inputs.landed_known = landed_known_;
+    inputs.landed = landed_;
+    inputs.failsafe = failsafe_;
+    const auto decision = lifecycle_.update(inputs);
 
-    const double streaming_seconds = (now() - prestream_started_).seconds();
-    if (streaming_seconds >= prestream_seconds_ && !offboard_) {
-      if (!mode_command_sent_ || (now() - last_mode_command_).seconds() >= 1.0) {
+    if (decision.state == ExecutorFlightState::LAND_LATCHED) {
+      if (land_latched_since_.time_since_epoch().count() == 0) {
+        land_latched_since_ = steadyNow();
+      }
+    } else {
+      land_latched_since_ = {};
+    }
+
+    if (decision.stream_offboard && have_odometry_) {
+      publishOffboardControlMode(mode_ == Mode::VISUAL);
+      publishSetpoint();
+    }
+    if (decision.request_offboard && px4_ready_ &&
+      ageOrInfinity(last_mode_command_) >= 1.0)
+    {
         publishVehicleCommand(
           px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0F, 6.0F);
-        mode_command_sent_ = true;
-        last_mode_command_ = now();
-      }
-      return;
+      last_mode_command_ = steadyNow();
     }
-    if (offboard_ && !armed_ &&
-      (!arm_command_sent_ || (now() - last_arm_command_).seconds() >= 1.0))
+    if (decision.request_arm && px4_ready_ && !failsafe_ &&
+      ageOrInfinity(last_arm_command_) >= 1.0)
     {
       publishVehicleCommand(
         px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0F);
-      arm_command_sent_ = true;
-      last_arm_command_ = now();
+      last_arm_command_ = steadyNow();
     }
+    if (decision.request_land && ageOrInfinity(last_land_command_) >= 1.0) {
+      publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_LAND);
+      last_land_command_ = steadyNow();
+      publishState("LAND_COMMAND_SENT");
+    }
+    const bool landed_after_latch =
+      landed_since_.time_since_epoch().count() != 0 &&
+      land_latched_since_.time_since_epoch().count() != 0 &&
+      landed_since_ >= land_latched_since_;
+    if (shouldRequestGroundDisarm(
+        decision.state, armed_, auto_land_, landed_, landed_after_latch,
+        ageOrInfinity(landed_since_),
+        ageOrInfinity(land_latched_since_), ground_disarm_delay_seconds_) &&
+      ageOrInfinity(last_disarm_command_) >= 1.0)
+    {
+      publishVehicleCommand(
+        px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0F);
+      last_disarm_command_ = steadyNow();
+      publishState("GROUND_DISARM_COMMAND_SENT");
+    }
+    if (decision.request_loiter && ageOrInfinity(last_loiter_command_) >= 1.0) {
+      // PX4 custom main mode AUTO=4, AUTO sub-mode LOITER=3.
+      publishVehicleCommand(
+        px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0F, 4.0F, 3.0F);
+      last_loiter_command_ = steadyNow();
+      publishState("RESET_LOITER_COMMAND_SENT");
+    }
+    publishLifecycleState(decision.state);
   }
 
-  double ageOrInfinity(const rclcpp::Time & stamp) const
+  static SteadyTime steadyNow()
   {
-    if (stamp.nanoseconds() == 0) {
+    return std::chrono::steady_clock::now();
+  }
+
+  static double ageOrInfinity(const SteadyTime & stamp)
+  {
+    if (stamp.time_since_epoch().count() == 0) {
       return std::numeric_limits<double>::infinity();
     }
-    return (now() - stamp).seconds();
+    return std::chrono::duration<double>(steadyNow() - stamp).count();
   }
 
-  void enterLand(const std::string & reason)
+  void publishLifecycleState(ExecutorFlightState state)
   {
-    mode_ = Mode::LAND;
-    if (!land_command_sent_) {
-      publishVehicleCommand(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_NAV_LAND);
-      land_command_sent_ = true;
+    // Publish the current state as a heartbeat. Diagnostic events share this
+    // transient-local topic, so a late joiner must not mistake an old event
+    // for the lifecycle state.
+    switch (state) {
+      case ExecutorFlightState::DISABLED: publishState("LIFECYCLE DISABLED"); break;
+      case ExecutorFlightState::PRESTREAM: publishState("LIFECYCLE PRESTREAM"); break;
+      case ExecutorFlightState::ACTIVE: publishState("LIFECYCLE ACTIVE"); break;
+      case ExecutorFlightState::HOLD: publishState("LIFECYCLE HOLD"); break;
+      case ExecutorFlightState::LAND_LATCHED: publishState("LIFECYCLE LAND_LATCHED"); break;
+      case ExecutorFlightState::COMPLETE: publishState("LIFECYCLE COMPLETE"); break;
     }
-    publishState(reason);
   }
 
   void publishOffboardControlMode(bool velocity_control)
@@ -297,7 +410,7 @@ private:
 
     if (mode_ == Mode::VISUAL) {
       Vec3 velocity{};
-      if ((now() - last_visual_velocity_).seconds() <= 0.3) {
+      if (ageOrInfinity(last_visual_velocity_) <= 0.3) {
         velocity = visual_velocity_;
       }
       const Vec3 ned_velocity = enuToNed(velocity);
@@ -361,12 +474,14 @@ private:
   }
 
   void publishVehicleCommand(
-    std::uint32_t command, float param1 = 0.0F, float param2 = 0.0F)
+    std::uint32_t command, float param1 = 0.0F, float param2 = 0.0F,
+    float param3 = 0.0F)
   {
     px4_msgs::msg::VehicleCommand message;
     message.timestamp = timestampMicros();
     message.param1 = param1;
     message.param2 = param2;
+    message.param3 = param3;
     message.command = command;
     message.target_system = 1;
     message.target_component = 1;
@@ -380,29 +495,41 @@ private:
   double prestream_seconds_{1.0};
   double hold_timeout_{0.3};
   double land_timeout_{1.0};
+  double minimum_replan_execution_seconds_{1.0};
+  double ground_disarm_delay_seconds_{2.0};
   Vec3 map_origin_;
   Mode mode_{Mode::DISABLED};
+  ExecutorRequestedMode requested_mode_{ExecutorRequestedMode::DISABLED};
+  ExecutorLifecycle lifecycle_;
   navigation_message::Trajectory trajectory_;
   bool have_trajectory_{false};
   bool trajectory_started_{false};
   bool have_odometry_{false};
   bool armed_{false};
   bool offboard_{false};
+  bool auto_land_{false};
+  bool auto_loiter_{false};
+  bool landed_known_{false};
+  bool landed_{false};
+  bool px4_ready_{false};
+  bool have_status_{false};
   bool failsafe_{false};
-  bool mode_command_sent_{false};
-  bool arm_command_sent_{false};
-  bool land_command_sent_{false};
   Vec3 current_position_;
   Vec3 hold_position_;
   Vec3 visual_velocity_;
   rclcpp::Time trajectory_start_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time prestream_started_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_mode_command_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_arm_command_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_visual_velocity_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_odometry_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_control_intent_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_trajectory_{0, 0, RCL_ROS_TIME};
+  SteadyTime prestream_started_{};
+  SteadyTime last_mode_command_{};
+  SteadyTime last_arm_command_{};
+  SteadyTime last_disarm_command_{};
+  SteadyTime last_land_command_{};
+  SteadyTime last_loiter_command_{};
+  SteadyTime last_visual_velocity_{};
+  SteadyTime last_odometry_{};
+  SteadyTime last_control_intent_{};
+  SteadyTime last_trajectory_{};
+  SteadyTime landed_since_{};
+  SteadyTime land_latched_since_{};
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_publisher_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr setpoint_publisher_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr command_publisher_;
@@ -412,6 +539,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr visual_velocity_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscription_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr status_subscription_;
+  rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

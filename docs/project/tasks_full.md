@@ -50,5 +50,5 @@
 - [ ] M9.1 World.play() → host topic 全在
 - [ ] M9.2 cmd_vel → X1 动
 - [ ] M9.3 hand_command → 双臂 + 双夹爪动
-- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land（无人机，已拖）
+- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land（2026-07-22 可见无人机已多次受控起降；最终安全构建的 `round1i` 探针 `success=true`，正式 1.8 m/30 s 与重复稳定性仍待验收，见 `drone_hover_evidence_2026-07-22.json`）
 - [ ] M9.6 全流程一镜到底

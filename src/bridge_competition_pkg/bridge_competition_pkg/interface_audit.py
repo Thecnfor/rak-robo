@@ -40,6 +40,7 @@ COMMON_REQUIRED_TOPICS = [
 
 PX4_REQUIRED_TOPICS = [
     *COMMON_REQUIRED_TOPICS,
+    '/fmu/out/sensor_combined',
     '/fmu/out/vehicle_odometry',
     '/fmu/out/vehicle_status',
     '/fmu/out/vehicle_command_ack',
@@ -135,19 +136,30 @@ class InterfaceAudit(Node):
                     for endpoint in subscribers
                 ],
             }
-        # The evaluate_interface helper does its own resolution, but we pass it
-        # node-name maps keyed by the resolved name so its checks line up.
+        # The evaluate_interface helper keys its node maps by the *resolved*
+        # topic name (e.g. ``/fmu/out/vehicle_status_v1``), so build the maps
+        # with the same keying — otherwise a name with a versioned alias
+        # would be flagged as unpublished despite having live publishers.
         publisher_nodes = {
-            name: [entry['node'] for entry in topics[name]['publishers']]
+            resolved[name]: [entry['node'] for entry in topics[name]['publishers']]
             for name in self._required
         }
         subscriber_nodes = {
-            name: [
+            resolved[name]: [
                 entry['node'] for entry in topics[name]['subscribers']
                 if entry['node'] != '/drone_interface_audit'
             ]
             for name in self._required
         }
+        # Mirror under the required name too: evaluate_interface first
+        # resolves the required name, then looks up the resolved key; if the
+        # audit chain is invoked with the unversioned name elsewhere, the
+        # fallback lookup under the required key still works.
+        for name in self._required:
+            actual = resolved[name]
+            if actual != name and name not in publisher_nodes:
+                publisher_nodes[name] = publisher_nodes[actual]
+                subscriber_nodes[name] = subscriber_nodes[actual]
         summary = evaluate_interface(
             self._required,
             graph_types,

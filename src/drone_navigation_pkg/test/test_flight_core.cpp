@@ -10,6 +10,11 @@
 using drone_navigation::FlightPhase;
 using drone_navigation::FlightSupervisor;
 using drone_navigation::ExecutorSafetyAction;
+using drone_navigation::ExecutorFlightState;
+using drone_navigation::ExecutorLifecycle;
+using drone_navigation::ExecutorLifecycleInputs;
+using drone_navigation::ExecutorRequestedMode;
+using drone_navigation::reduceExecutorRequest;
 using drone_navigation::PlannerConfig;
 using drone_navigation::Px4OdometrySample;
 using drone_navigation::RollingVoxelMap;
@@ -163,6 +168,8 @@ TEST(FlightSupervisor, RunsNominalMissionSequence)
   inputs.at_home = true;
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
   inputs.landed = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
+  inputs.armed = false;
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::COMPLETE);
 }
 
@@ -182,8 +189,10 @@ TEST(FlightSupervisor, LandsOnPx4FailsafeWhileAirborne)
 
   inputs.px4_failsafe = true;
   const auto decision = supervisor.update(inputs);
-  EXPECT_EQ(decision.phase, FlightPhase::HOLD);
+  EXPECT_EQ(decision.phase, FlightPhase::LAND);
   EXPECT_TRUE(decision.request_land);
+  inputs.px4_failsafe = false;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
   EXPECT_TRUE(supervisor.update(inputs).request_land);
 }
 
@@ -211,4 +220,248 @@ TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)
   EXPECT_EQ(
     executorSafetyAction(true, 1.1, 0.1, 0.1, 0.3, 1.0),
     ExecutorSafetyAction::LAND);
+}
+
+TEST(TrajectoryUpdates, PreserveMinimumExecutionWindowWhileActive)
+{
+  EXPECT_TRUE(drone_navigation::shouldAcceptTrajectoryUpdate(
+    false, false, false, 0.0, 1.0));
+  EXPECT_TRUE(drone_navigation::shouldAcceptTrajectoryUpdate(
+    true, false, false, 0.2, 1.0));
+  EXPECT_FALSE(drone_navigation::shouldAcceptTrajectoryUpdate(
+    true, true, true, 0.2, 1.0));
+  EXPECT_TRUE(drone_navigation::shouldAcceptTrajectoryUpdate(
+    true, true, true, 1.0, 1.0));
+}
+
+TEST(ExecutorLanding, DisarmsOnlyAfterConfirmedGroundDelay)
+{
+  using drone_navigation::ExecutorFlightState;
+  EXPECT_FALSE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::ACTIVE, true, true, true, true, 3.0, 3.0, 2.0));
+  EXPECT_FALSE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::LAND_LATCHED, true, false, true, true, 3.0, 3.0, 2.0));
+  EXPECT_FALSE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::LAND_LATCHED, true, true, true, true, 3.0, 1.9, 2.0));
+  EXPECT_TRUE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::LAND_LATCHED, true, true, true, true, 3.0, 2.0, 2.0));
+  EXPECT_FALSE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::LAND_LATCHED, false, true, true, true, 3.0, 3.0, 2.0));
+  EXPECT_FALSE(drone_navigation::shouldRequestGroundDisarm(
+    ExecutorFlightState::LAND_LATCHED, true, true, true, false, 3.0, 3.0, 2.0));
+}
+
+TEST(OperatorArmGate, AllowsGroundArmAndAlreadyActiveOffboardTracking)
+{
+  EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
+    true, true, true, true, true, false, false));
+  EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
+    true, true, true, true, false, true, true));
+  EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
+    true, true, true, true, true, true, true));
+  EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
+    true, true, true, true, false, true, false));
+  EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
+    true, false, true, true, true, false, false));
+  EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
+    false, true, true, true, true, false, false));
+}
+
+TEST(Px4DiscreteState, UsesCachedStateOnlyWhileContinuousTransportIsAlive)
+{
+  EXPECT_TRUE(drone_navigation::px4DiscreteStateUsable(true, 0.2, 0.6));
+  EXPECT_FALSE(drone_navigation::px4DiscreteStateUsable(false, 0.2, 0.6));
+  EXPECT_FALSE(drone_navigation::px4DiscreteStateUsable(true, 0.61, 0.6));
+}
+
+TEST(CargoDoorState, IgnoresUnrelatedStatusAndUpdatesOnlyExplicitDoorEvents)
+{
+  EXPECT_TRUE(drone_navigation::updateSideDoorClosed(
+    true, "payload_locked=True prearm_support=True"));
+  EXPECT_TRUE(drone_navigation::updateSideDoorClosed(false, "left_closed"));
+  EXPECT_FALSE(drone_navigation::updateSideDoorClosed(true, "left_opened"));
+}
+
+TEST(ExecutorLifecycle, LandLatchRejectsHoldAndPreventsRearming)
+{
+  ExecutorLifecycle lifecycle;
+  ExecutorLifecycleInputs inputs;
+  inputs.landed = false;
+  inputs.requested_mode = ExecutorRequestedMode::ARM_TRAJECTORY;
+  EXPECT_EQ(lifecycle.update(inputs).state, ExecutorFlightState::PRESTREAM);
+
+  inputs.prestream_complete = true;
+  inputs.offboard = true;
+  inputs.armed = true;
+  EXPECT_EQ(lifecycle.update(inputs).state, ExecutorFlightState::ACTIVE);
+
+  inputs.requested_mode = ExecutorRequestedMode::LAND;
+  auto landing = lifecycle.update(inputs);
+  EXPECT_EQ(landing.state, ExecutorFlightState::LAND_LATCHED);
+  EXPECT_TRUE(landing.request_land);
+
+  inputs.requested_mode = ExecutorRequestedMode::HOLD;
+  inputs.auto_land = true;
+  inputs.offboard = false;
+  inputs.armed = false;
+  inputs.landed = true;
+  inputs.landed_known = true;
+  const auto completed = lifecycle.update(inputs);
+  EXPECT_EQ(completed.state, ExecutorFlightState::COMPLETE);
+  EXPECT_FALSE(completed.stream_offboard);
+  EXPECT_FALSE(completed.request_offboard);
+  EXPECT_FALSE(completed.request_arm);
+
+  inputs.auto_land = false;
+  inputs.offboard = true;
+  const auto stale_hold = lifecycle.update(inputs);
+  EXPECT_EQ(stale_hold.state, ExecutorFlightState::COMPLETE);
+  EXPECT_FALSE(stale_hold.request_arm);
+}
+
+TEST(ExecutorLifecycle, ResetRequiresLandedAndDisarmed)
+{
+  ExecutorLifecycle lifecycle;
+  ExecutorLifecycleInputs inputs;
+  inputs.landed = false;
+  inputs.requested_mode = ExecutorRequestedMode::ARM_TRAJECTORY;
+  lifecycle.update(inputs);
+  inputs.offboard = true;
+  inputs.armed = true;
+  inputs.prestream_complete = true;
+  lifecycle.update(inputs);
+  inputs.requested_mode = ExecutorRequestedMode::LAND;
+  lifecycle.update(inputs);
+
+  inputs.requested_mode = ExecutorRequestedMode::RESET;
+  EXPECT_EQ(lifecycle.update(inputs).state, ExecutorFlightState::LAND_LATCHED);
+
+  inputs.armed = false;
+  inputs.landed = true;
+  inputs.landed_known = true;
+  EXPECT_EQ(lifecycle.update(inputs).state, ExecutorFlightState::COMPLETE);
+  const auto reset = lifecycle.update(inputs);
+  EXPECT_EQ(reset.state, ExecutorFlightState::DISABLED);
+  EXPECT_TRUE(reset.request_loiter);
+}
+
+TEST(ExecutorLifecycle, GroundLandIsNoOpAndResetCanRecoverDisabledState)
+{
+  EXPECT_EQ(
+    reduceExecutorRequest(
+      ExecutorRequestedMode::DISABLED,
+      ExecutorRequestedMode::LAND,
+      ExecutorFlightState::DISABLED),
+    ExecutorRequestedMode::DISABLED);
+  EXPECT_EQ(
+    reduceExecutorRequest(
+      ExecutorRequestedMode::LAND,
+      ExecutorRequestedMode::RESET,
+      ExecutorFlightState::DISABLED),
+    ExecutorRequestedMode::RESET);
+}
+
+TEST(ExecutorLifecycle, OnlyExplicitArmRequestCanLeaveDisabled)
+{
+  ExecutorLifecycle lifecycle;
+  ExecutorLifecycleInputs inputs;
+  inputs.landed = true;
+  inputs.requested_mode = ExecutorRequestedMode::TRAJECTORY;
+  auto decision = lifecycle.update(inputs);
+  EXPECT_EQ(decision.state, ExecutorFlightState::DISABLED);
+  EXPECT_FALSE(decision.request_arm);
+
+  inputs.requested_mode = ExecutorRequestedMode::HOLD;
+  decision = lifecycle.update(inputs);
+  EXPECT_EQ(decision.state, ExecutorFlightState::DISABLED);
+  EXPECT_FALSE(decision.stream_offboard);
+
+  inputs.requested_mode = ExecutorRequestedMode::ARM_TRAJECTORY;
+  decision = lifecycle.update(inputs);
+  EXPECT_EQ(decision.state, ExecutorFlightState::PRESTREAM);
+  EXPECT_FALSE(decision.request_arm);
+
+  inputs.prestream_complete = true;
+  decision = lifecycle.update(inputs);
+  EXPECT_TRUE(decision.request_offboard);
+  inputs.offboard = true;
+  decision = lifecycle.update(inputs);
+  EXPECT_TRUE(decision.request_arm);
+}
+
+TEST(ExecutorLifecycle, UnknownLandingStateCannotCompleteLanding)
+{
+  ExecutorLifecycle lifecycle;
+  ExecutorLifecycleInputs inputs;
+  inputs.requested_mode = ExecutorRequestedMode::ARM_TRAJECTORY;
+  inputs.landed = false;
+  lifecycle.update(inputs);
+  inputs.prestream_complete = true;
+  inputs.offboard = true;
+  inputs.armed = true;
+  lifecycle.update(inputs);
+  inputs.requested_mode = ExecutorRequestedMode::LAND;
+  lifecycle.update(inputs);
+
+  inputs.armed = false;
+  inputs.landed = true;
+  inputs.landed_known = false;
+  EXPECT_EQ(lifecycle.update(inputs).state, ExecutorFlightState::LAND_LATCHED);
+}
+
+TEST(ExecutorLifecycle, OffboardModeDoesNotBypassFullPrestream)
+{
+  ExecutorLifecycle lifecycle;
+  ExecutorLifecycleInputs inputs;
+  inputs.requested_mode = ExecutorRequestedMode::ARM_TRAJECTORY;
+  inputs.landed = true;
+  lifecycle.update(inputs);
+
+  inputs.offboard = true;
+  inputs.prestream_complete = false;
+  EXPECT_FALSE(lifecycle.update(inputs).request_arm);
+
+  inputs.prestream_complete = true;
+  EXPECT_TRUE(lifecycle.update(inputs).request_arm);
+}
+
+TEST(ExecutorLifecycle, LandingRequestIsStickyUntilCompleted)
+{
+  for (const auto incoming : {
+      ExecutorRequestedMode::HOLD,
+      ExecutorRequestedMode::TRAJECTORY,
+      ExecutorRequestedMode::ARM_TRAJECTORY,
+      ExecutorRequestedMode::RESET,
+      ExecutorRequestedMode::DISABLED})
+  {
+    EXPECT_EQ(
+      reduceExecutorRequest(
+        ExecutorRequestedMode::LAND, incoming, ExecutorFlightState::ACTIVE),
+      ExecutorRequestedMode::LAND);
+    EXPECT_EQ(
+      reduceExecutorRequest(
+        ExecutorRequestedMode::LAND, incoming, ExecutorFlightState::LAND_LATCHED),
+      ExecutorRequestedMode::LAND);
+  }
+  EXPECT_EQ(
+    reduceExecutorRequest(
+      ExecutorRequestedMode::LAND, ExecutorRequestedMode::RESET,
+      ExecutorFlightState::COMPLETE),
+    ExecutorRequestedMode::RESET);
+}
+
+TEST(ExecutorLifecycle, FailsafeLandingStillRequestsPx4Land)
+{
+  drone_navigation::ExecutorLifecycle lifecycle;
+  drone_navigation::ExecutorLifecycleInputs inputs;
+  inputs.requested_mode = drone_navigation::ExecutorRequestedMode::ARM_TRAJECTORY;
+  EXPECT_EQ(lifecycle.update(inputs).state, drone_navigation::ExecutorFlightState::PRESTREAM);
+  inputs.armed = true;
+  inputs.offboard = true;
+  EXPECT_EQ(lifecycle.update(inputs).state, drone_navigation::ExecutorFlightState::ACTIVE);
+  inputs.failsafe = true;
+  const auto decision = lifecycle.update(inputs);
+  EXPECT_EQ(decision.state, drone_navigation::ExecutorFlightState::LAND_LATCHED);
+  EXPECT_FALSE(decision.stream_offboard);
+  EXPECT_TRUE(decision.request_land);
 }
