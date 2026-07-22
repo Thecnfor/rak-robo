@@ -119,6 +119,14 @@ class HoverProbeCoreTest(unittest.TestCase):
         )
         self.assertFalse(CORE.verified_landing_region_available(region, False))
         self.assertTrue(CORE.verified_landing_region_available(region, True))
+        self.assertEqual(
+            CORE.landing_approach_target(region, 1.13, 0.10),
+            (4.55, -0.38, 1.23),
+        )
+        self.assertEqual(
+            CORE.cradle_touchdown_target(region, 1.13),
+            (4.55, -0.38, 1.13),
+        )
 
     def test_actuator_saturation_requires_finite_outputs_below_limit(self):
         self.assertFalse(CORE.actuator_outputs_saturated([0.2, 0.4, 0.6, 0.8]))

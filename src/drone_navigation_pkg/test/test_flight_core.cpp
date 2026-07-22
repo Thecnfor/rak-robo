@@ -24,6 +24,7 @@ using drone_navigation::Vec3;
 using drone_navigation::VoxelPlanner;
 using drone_navigation::executorSafetyAction;
 using drone_navigation::boolTokenValue;
+using drone_navigation::fixedDiagnosticControlSetpoint;
 using drone_navigation::fixedSetpointReady;
 
 namespace
@@ -240,6 +241,33 @@ TEST(ExecutorWatchdog, HoldsThenLandsOnStaleControlIntent)
   EXPECT_EQ(
     executorSafetyAction(true, 0.1, 1.01, 0.1, 0.3, 1.0),
     ExecutorSafetyAction::LAND);
+}
+
+TEST(ExecutorFixedDiagnostic, VerticalOnlyAvoidsConstrainedPositionAndYawWindup)
+{
+  drone_navigation::TrajectoryState state;
+  state.position = {1.0, 2.0, -0.10};
+  state.velocity = {0.1, -0.2, -0.01};
+  state.acceleration = {0.3, 0.4, -0.02};
+  state.yaw = 1.2;
+
+  const auto vertical = fixedDiagnosticControlSetpoint(state, true);
+  EXPECT_TRUE(std::isnan(vertical.position[0]));
+  EXPECT_TRUE(std::isnan(vertical.position[1]));
+  EXPECT_DOUBLE_EQ(vertical.position[2], -0.10);
+  EXPECT_DOUBLE_EQ(vertical.velocity[0], 0.0);
+  EXPECT_DOUBLE_EQ(vertical.velocity[1], 0.0);
+  EXPECT_DOUBLE_EQ(vertical.velocity[2], -0.01);
+  EXPECT_TRUE(std::isnan(vertical.acceleration[0]));
+  EXPECT_TRUE(std::isnan(vertical.acceleration[1]));
+  EXPECT_DOUBLE_EQ(vertical.acceleration[2], -0.02);
+  EXPECT_TRUE(std::isnan(vertical.yaw));
+  EXPECT_TRUE(std::isnan(vertical.yawspeed));
+
+  const auto full = fixedDiagnosticControlSetpoint(state, false);
+  EXPECT_DOUBLE_EQ(full.position[0], 1.0);
+  EXPECT_DOUBLE_EQ(full.position[1], 2.0);
+  EXPECT_DOUBLE_EQ(full.yaw, 1.2);
 }
 
 TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)

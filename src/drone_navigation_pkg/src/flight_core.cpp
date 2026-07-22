@@ -232,6 +232,34 @@ Vec3 operator+(const Vec3 & lhs, const Vec3 & rhs)
   return {lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
 }
 
+PositionControlSetpoint fixedDiagnosticControlSetpoint(
+  const TrajectoryState & state_ned,
+  bool vertical_only)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  if (!vertical_only) {
+    return {
+      {state_ned.position.x, state_ned.position.y, state_ned.position.z},
+      {state_ned.velocity.x, state_ned.velocity.y, state_ned.velocity.z},
+      {state_ned.acceleration.x, state_ned.acceleration.y, state_ned.acceleration.z},
+      state_ned.yaw,
+      nan,
+    };
+  }
+
+  // The launch cradle supplies the horizontal constraint during the first
+  // 0.10 m diagnostic step. Do not let local-position or heading estimator
+  // drift wind up the corresponding controllers while the vehicle is guided.
+  // Finite zero XY velocity keeps PX4's per-axis validity contract satisfied.
+  return {
+    {nan, nan, state_ned.position.z},
+    {0.0, 0.0, state_ned.velocity.z},
+    {nan, nan, state_ned.acceleration.z},
+    nan,
+    nan,
+  };
+}
+
 Vec3 operator-(const Vec3 & lhs, const Vec3 & rhs)
 {
   return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};

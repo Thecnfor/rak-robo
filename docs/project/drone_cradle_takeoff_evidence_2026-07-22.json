@@ -1,0 +1,56 @@
+{
+  "accepted": true,
+  "scope": "guided +0.10 m PX4 Offboard takeoff, hold, cradle touchdown, disarm and reset",
+  "scene": {
+    "prearm_support_boxes": 6,
+    "lateral_guide_clearance_m": 0.003,
+    "lateral_guide_height_m": 0.15,
+    "vehicle_physx_mass_kg": 1.215,
+    "payload_joint_translation_error_m": 0.0,
+    "payload_joint_rotation_error_rad": 0.0
+  },
+  "probe": {
+    "completed_rounds": 1,
+    "fixed_step_passed_m": 0.1,
+    "fixed_step_timeout_sim_s": 30.0,
+    "fixed_target_horizontal_tolerance_m": 0.02,
+    "fixed_target_altitude_tolerance_m": 0.015,
+    "landed": true,
+    "disarmed": true,
+    "successful_px4_command_acks": 5,
+    "hold_max_horizontal_error_m": 0.02,
+    "hold_max_altitude_error_m": 0.0162,
+    "hold_max_speed_mps": 0.0381,
+    "touchdown_position": [4.54530668258667, -0.3825894296169281, 1.1299914121627808],
+    "touchdown_distance_from_verified_center_m": 0.01243
+  },
+  "rosbag": {
+    "path": "bags/drone_cradle_vertical_final_20260722_1703/drone_cradle_vertical_final_20260722_1703_0.mcap",
+    "sha256": "e2e197b5409ecbed62a9226d48f9a11c44c532d091b04242f2157dc5c58e980a",
+    "messages": 72118,
+    "max_world_z_m": 1.247107982635498,
+    "max_clearance_above_support_m": 0.11710798263549815,
+    "vertical_only_contract": "position XY NaN, velocity XY zero, yaw NaN"
+  },
+  "px4_ulog": {
+    "path": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-22/17_03_20.ulg",
+    "sha256": "64e1771020e90fe422881c7de3dfbdb838c85a01922c7b730120961c4b505395",
+    "armed_duration_sim_s": 33.66,
+    "motor_max_each": [0.535913, 0.535311, 0.536355, 0.534546],
+    "motor_saturation_threshold": 0.95,
+    "motor_saturation_samples": 0,
+    "max_estimated_total_thrust_n": 12.016259,
+    "vehicle_weight_n": 11.91915,
+    "max_abs_body_rate_rad_s": [0.171527, 0.303506, 0.267734],
+    "failsafe_samples": 0,
+    "filter_fault_samples": 0,
+    "gps_check_fail_samples": 0,
+    "max_innovation_test_ratios": {
+      "velocity": 0.0282649,
+      "position": 0.00517018,
+      "height": 0.00250302,
+      "heading": 0.0218095
+    }
+  },
+  "acceptance_note": "The live probe intentionally left acceptance pending because actuator_motors is absent from DDS. Persisted ULog analysis closed the gate: no actuator sample reached 0.95 and no estimator/failsafe fault occurred."
+}

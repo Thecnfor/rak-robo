@@ -44,10 +44,12 @@ from hover_probe_core import (
     RateWindow,
     StabilityWindow,
     actuator_outputs_saturated,
-    fixed_step_reached,
+    cradle_touchdown_target,
     fixed_step_envelope_safe,
+    fixed_step_reached,
     ground_observation_usable,
     hold_acceptance_passes,
+    landing_approach_target,
     normalized_node_names,
     parse_bool_token,
     phase_elapsed_seconds,
@@ -104,6 +106,18 @@ class HoverProbe(Node):
         )
         self.fixed_step_settle_seconds = float(
             self.declare_parameter("fixed_step_settle_seconds", 2.0).value
+        )
+        self.fixed_step_timeout = float(
+            self.declare_parameter("fixed_step_timeout", 15.0).value
+        )
+        self.fixed_target_horizontal_tolerance = float(
+            self.declare_parameter("fixed_target_horizontal_tolerance", 0.10).value
+        )
+        self.fixed_target_altitude_tolerance = float(
+            self.declare_parameter("fixed_target_altitude_tolerance", 0.05).value
+        )
+        self.cradle_touchdown = bool(
+            self.declare_parameter("cradle_touchdown", False).value
         )
         landing_half_extents = tuple(
             float(value)
@@ -193,6 +207,9 @@ class HoverProbe(Node):
             or self.fixed_hold_altitude <= self.prearm_limits.expected_position[2]
             or self.fixed_hold_altitude > self.prearm_limits.expected_position[2] + 0.30
             or self.fixed_step_settle_seconds <= 0.0
+            or self.fixed_step_timeout <= 0.0
+            or self.fixed_target_horizontal_tolerance <= 0.0
+            or self.fixed_target_altitude_tolerance <= 0.0
             or self.landing_return_timeout <= 0.0
             or not self.landing_region.valid()
             or not 0.0 < self.actuator_saturation_threshold <= 1.0
@@ -659,6 +676,8 @@ class HoverProbe(Node):
             horizontal_error,
             altitude_error,
             self.raw_speed,
+            horizontal_tolerance_m=self.fixed_target_horizontal_tolerance,
+            altitude_tolerance_m=self.fixed_target_altitude_tolerance,
         )
         if reached:
             if self.fixed_settle_since is None:
@@ -770,7 +789,13 @@ class HoverProbe(Node):
             "goal_altitude": self.goal_altitude,
             "fixed_setpoint_diagnostic": self.fixed_setpoint_diagnostic,
             "fixed_step_clearances": self.fixed_step_clearances,
+            "fixed_step_timeout": self.fixed_step_timeout,
+            "fixed_target_horizontal_tolerance": (
+                self.fixed_target_horizontal_tolerance
+            ),
+            "fixed_target_altitude_tolerance": self.fixed_target_altitude_tolerance,
             "fixed_hold_altitude": self.fixed_hold_altitude,
+            "cradle_touchdown": self.cradle_touchdown,
             "landing_region": {
                 "center_xy": self.landing_region.center_xy,
                 "half_extents_xy": self.landing_region.half_extents_xy,
@@ -908,7 +933,7 @@ class HoverProbe(Node):
                 self.fixed_settle_since_sim_ns = None
                 if self.fixed_step_index >= len(self.fixed_step_clearances):
                     self._set_phase("FIXED_HOLD_SETTLE")
-            elif self._phase_elapsed(now, use_sim_time=True) > 15.0:
+            elif self._phase_elapsed(now, use_sim_time=True) > self.fixed_step_timeout:
                 self._abort(f"fixed step {clearance:.2f} m timeout")
         elif self.phase == "FIXED_HOLD_SETTLE":
             target = (
@@ -959,11 +984,17 @@ class HoverProbe(Node):
                 self.fixed_settle_since_sim_ns = None
                 self._set_phase("RETURN_HOME")
         elif self.phase == "RETURN_HOME":
-            target = (
-                self.home_nav[0],
-                self.home_nav[1],
-                self.home_nav[2] + self.fixed_step_clearances[-1],
-            )
+            if self.cradle_touchdown:
+                target = cradle_touchdown_target(
+                    self.landing_region,
+                    self.home_nav[2],
+                )
+            else:
+                target = landing_approach_target(
+                    self.landing_region,
+                    self.home_nav[2],
+                    self.fixed_step_clearances[-1],
+                )
             self._command_goal(target)
             self._publish_mode("FIXED")
             inside_region = self.landing_region.contains(tuple(self.raw_position[:2]))
@@ -1116,9 +1147,9 @@ class HoverProbe(Node):
                 self._publish_mode("LAND")
         elif self.phase == "ABORT_RETURN":
             target = (
-                self.home_nav[0],
-                self.home_nav[1],
-                self.abort_return_altitude,
+                self.landing_region.center_xy[0],
+                self.landing_region.center_xy[1],
+                self.home_nav[2] if self.cradle_touchdown else self.abort_return_altitude,
             )
             self._command_goal(target)
             self._publish_mode("FIXED")

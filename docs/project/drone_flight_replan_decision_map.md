@@ -300,12 +300,26 @@ overrides `CA_ROTOR{0..3}_{PX,PY,KM}` with measured FRD geometry and the Pegasus
 thrust/rolling-moment ratio. Pegasus's nominally visual rotor animation also
 drove massive revolute rotor joints at 5/100 rad/s while the thrust model
 separately applied rolling moment, so the competition scene now disables that
-physical animation. The single-variable repeat showed that this cleanup reduces
-the initial joint disturbance but is not sufficient: near hover thrust the
-vehicle still tips/slides off the support, then the controller saturates. The
-current physical blocker is the narrow 0.05 m X contact footprint combined with
-PX4's 3 s takeoff ramp; redesign the static support as a non-jointed launch
-cradle and only then test `MPC_TKO_RAMP_T` or rate gains one group at a time.
+physical animation. The narrow contact footprint is now surrounded by a
+non-jointed launch cradle: two support pads plus four 0.15 m high low-friction
+lateral guides with 3 mm clearance. The first repeat exposed constrained-control
+windup, so the diagnostic executor now has an explicit vertical-only mode (Z
+position, zero XY velocity, yaw unset), and the probe can descend onto the
+support before requesting PX4 LAND. Normal EGO/trajectory setpoints do not use
+this diagnostic mode.
+
+The final +0.10 m run passed the 0.02 m horizontal, 0.015 m altitude and
+0.05 m/s settling gates, reached 0.1171 m maximum clearance, held with
+0.0381 m/s maximum speed, returned to the support and disarmed 0.01243 m from
+the verified centre. All five PX4 command ACKs succeeded. ULog showed balanced
+per-motor maxima of 0.5345--0.5364, zero samples above the 0.95 saturation
+threshold, no failsafe, no EKF filter/GPS-check fault, and maximum
+velocity/position/height/heading innovation test ratios of
+0.0283/0.0052/0.0025/0.0218. Evidence is in
+[`drone_cradle_takeoff_evidence_2026-07-22.json`](drone_cradle_takeoff_evidence_2026-07-22.json).
+The cradle/+0.10 m milestone is resolved; ticket #10 remains open until the
++0.20 m and 10 simulated-second free-hold criteria pass outside the guides.
+
 The diagnostic probe now treats the 10 s HOLD criteria as hard per-sample gates,
 observes normalized motor output for saturation, and rechecks the measured
 touchdown after disarm. A numerically valid rectangle is no longer sufficient:

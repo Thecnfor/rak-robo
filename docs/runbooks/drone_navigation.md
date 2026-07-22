@@ -200,21 +200,28 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
 只有从当前 USD 桌面/托架世界包围盒量出落区、确认矩形完全位于可承重表面后，才能
 同时传入 `landing_region_center`、`landing_half_extents` 并设置
 `-p landing_region_verified:=true`；不得用实时机体位置自动重设落区中心。
+固定设定点探针在正常返回和可恢复异常返回时，都会以该落区中心作为 LAND 前的
+水平目标；因此起飞托架可以与安全降落区分离。
 
 固定设定点诊断默认关闭，只有定位 PX4/机体模型问题时显式开启；它仍通过 supervisor
 提交意图，`trajectory_executor` 保持 `/fmu/in/*` 唯一写入者：
 
 ```bash
 ros2 launch drone_navigation_pkg navigation.launch.py \
-  allow_fixed_setpoint_diagnostic:=true
+  allow_fixed_setpoint_diagnostic:=true \
+  fixed_vertical_only_diagnostic:=true
 ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p preflight_only:=false \
   -p fixed_setpoint_diagnostic:=true \
-  -p landing_region_center:="[4.55,-0.38]" \
-  -p landing_half_extents:="[0.18,0.18]" \
+  -p landing_region_center:="[4.5575,-0.3802]" \
+  -p landing_half_extents:="[0.02,0.02]" \
   -p landing_region_verified:=true \
   -p fixed_step_clearances:="[0.10]" \
-  -p fixed_hold_altitude:=1.23
+  -p fixed_hold_altitude:=1.2309 \
+  -p fixed_step_timeout:=30.0 \
+  -p fixed_target_horizontal_tolerance:=0.02 \
+  -p fixed_target_altitude_tolerance:=0.015 \
+  -p cradle_touchdown:=true
 ```
 
 探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
@@ -226,9 +233,16 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
 v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和度；未完成 ULog 分析时
 探针不会把飞行标记为验收成功。解除锁定后仍用最终实测触地点复核落区。中断或降落
 确认延迟时，进程持续发布安全
-意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。2026-07-22 的四轮证据见
-`docs/project/drone_fixed_setpoint_evidence_2026-07-22.json`；当前不得继续放飞，须先
-把窄支架改成无 joint 的横向限位起飞托架并重做 +0.10 m 票据。
+意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。横向限位托架模式必须同时
+启用 `fixed_vertical_only_diagnostic`：首飞只锁高度，XY 使用零速度，yaw 留空，避免
+机体尚受限时由估计漂移积累位置/航向控制量；`cradle_touchdown` 会在 LAND 前先用同一
+模式垂直回到支撑面。
+
+2026-07-22 的 +0.10 m 票据已通过：最高离架 0.1171 m、HOLD 最大速度 0.0381 m/s、
+触地点距验证中心 0.01243 m，四电机 ULog 峰值为 0.5345--0.5364，0 个采样达到
+0.95 饱和门限，5 个 PX4 命令 ACK 全部成功。证据见
+`docs/project/drone_cradle_takeoff_evidence_2026-07-22.json`。这只解除托架内 +0.10 m
+首飞票据，不替代 +0.20 m/10 s HOLD、自由飞行或完整比赛流程验收。
 
 现场的拒绝/通过对照数据见
 `docs/project/prearm_pose_gate_evidence_2026-07-22.json`。

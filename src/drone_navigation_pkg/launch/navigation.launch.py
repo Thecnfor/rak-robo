@@ -16,16 +16,22 @@ def generate_launch_description():
         / 'navigation.yaml'
     )
     fixed_diagnostic = LaunchConfiguration('allow_fixed_setpoint_diagnostic')
+    fixed_vertical_only = LaunchConfiguration('fixed_vertical_only_diagnostic')
     common = {
         'parameters': [
             str(config),
             {'allow_fixed_setpoint_diagnostic': fixed_diagnostic},
+            {'fixed_vertical_only_diagnostic': fixed_vertical_only},
         ],
         'output': 'screen',
     }
     return LaunchDescription([
         DeclareLaunchArgument(
             'allow_fixed_setpoint_diagnostic',
+            default_value='false',
+        ),
+        DeclareLaunchArgument(
+            'fixed_vertical_only_diagnostic',
             default_value='false',
         ),
         Node(

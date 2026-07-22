@@ -27,6 +27,9 @@
     px4_command_ack_topic: /drone/navigation/px4_command_ack
     # Diagnostic-only direct position intent. Competition bringup keeps this off.
     allow_fixed_setpoint_diagnostic: false
+    # First-lift diagnostic only: command Z position and zero XY velocity while
+    # the launch cradle supplies the lateral constraint. Normal missions stay off.
+    fixed_vertical_only_diagnostic: false
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.

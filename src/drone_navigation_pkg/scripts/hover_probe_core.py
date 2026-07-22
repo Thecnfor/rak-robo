@@ -195,6 +195,27 @@ def verified_landing_region_available(region: LandingRegion, verified: bool) -> 
     return bool(verified) and region.valid()
 
 
+def landing_approach_target(
+    region: LandingRegion,
+    home_z: float,
+    clearance_m: float,
+) -> tuple:
+    """Return a fixed approach point above the verified landing region."""
+    if not region.valid() or not isfinite(home_z) or clearance_m <= 0.0:
+        raise ValueError("landing approach requires valid region and clearance")
+    return (region.center_xy[0], region.center_xy[1], home_z + clearance_m)
+
+
+def cradle_touchdown_target(
+    region: LandingRegion,
+    home_z: float,
+) -> tuple:
+    """Return the support contact pose for a guided vertical touchdown."""
+    if not region.valid() or not isfinite(home_z):
+        raise ValueError("cradle touchdown requires a valid region and home height")
+    return (region.center_xy[0], region.center_xy[1], home_z)
+
+
 def actuator_outputs_saturated(
     outputs,
     saturation_threshold: float = 0.95,

@@ -45,6 +45,8 @@ public:
       "ground_disarm_delay_seconds", 2.0);
     allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
       "allow_fixed_setpoint_diagnostic", false);
+    fixed_vertical_only_diagnostic_ = declare_parameter<bool>(
+      "fixed_vertical_only_diagnostic", false);
     fixed_setpoint_timeout_ = declare_parameter<double>(
       "fixed_setpoint_timeout", 0.6);
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
@@ -58,6 +60,10 @@ public:
     }
     if (fixed_setpoint_timeout_ <= 0.0) {
       throw std::runtime_error("fixed_setpoint_timeout must be positive");
+    }
+    if (fixed_vertical_only_diagnostic_ && !allow_fixed_setpoint_diagnostic_) {
+      throw std::runtime_error(
+              "fixed_vertical_only_diagnostic requires allow_fixed_setpoint_diagnostic");
     }
     const auto origin = declare_parameter<std::vector<double>>(
       "px4_map_origin", {4.55, -0.38, 1.13});
@@ -448,7 +454,9 @@ private:
     }
     publishState(
       "LIFECYCLE " + lifecycle + " fixed_setpoint_enabled=" +
-      (allow_fixed_setpoint_diagnostic_ ? "true" : "false"));
+      (allow_fixed_setpoint_diagnostic_ ? "true" : "false") +
+      " fixed_vertical_only=" +
+      (fixed_vertical_only_diagnostic_ ? "true" : "false"));
   }
 
   void publishOffboardControlMode(bool velocity_control)
@@ -495,22 +503,30 @@ private:
       } else if (mode_ == Mode::TRAJECTORY && have_trajectory_ && trajectory_started_) {
         state = trajectoryStateAt((now() - trajectory_start_).seconds());
       }
-      const Vec3 ned_position = enuToNed(state.position);
-      const Vec3 ned_velocity = enuToNed(state.velocity);
-      const Vec3 ned_acceleration = enuToNed(state.acceleration);
+      TrajectoryState state_ned;
+      state_ned.position = enuToNed(state.position);
+      state_ned.velocity = enuToNed(state.velocity);
+      state_ned.acceleration = enuToNed(state.acceleration);
+      state_ned.yaw = yawEnuToNed(state.yaw);
+      const bool vertical_only_diagnostic = fixed_vertical_only_diagnostic_ &&
+        (mode_ == Mode::FIXED || mode_ == Mode::HOLD);
+      const auto control_setpoint = fixedDiagnosticControlSetpoint(
+        state_ned,
+        vertical_only_diagnostic);
       setpoint.position = {
-        static_cast<float>(ned_position.x),
-        static_cast<float>(ned_position.y),
-        static_cast<float>(ned_position.z)};
+        static_cast<float>(control_setpoint.position[0]),
+        static_cast<float>(control_setpoint.position[1]),
+        static_cast<float>(control_setpoint.position[2])};
       setpoint.velocity = {
-        static_cast<float>(ned_velocity.x),
-        static_cast<float>(ned_velocity.y),
-        static_cast<float>(ned_velocity.z)};
+        static_cast<float>(control_setpoint.velocity[0]),
+        static_cast<float>(control_setpoint.velocity[1]),
+        static_cast<float>(control_setpoint.velocity[2])};
       setpoint.acceleration = {
-        static_cast<float>(ned_acceleration.x),
-        static_cast<float>(ned_acceleration.y),
-        static_cast<float>(ned_acceleration.z)};
-      setpoint.yaw = static_cast<float>(yawEnuToNed(state.yaw));
+        static_cast<float>(control_setpoint.acceleration[0]),
+        static_cast<float>(control_setpoint.acceleration[1]),
+        static_cast<float>(control_setpoint.acceleration[2])};
+      setpoint.yaw = static_cast<float>(control_setpoint.yaw);
+      setpoint.yawspeed = static_cast<float>(control_setpoint.yawspeed);
     }
     setpoint_publisher_->publish(setpoint);
   }
@@ -579,6 +595,7 @@ private:
   double ground_disarm_delay_seconds_{2.0};
   double fixed_setpoint_timeout_{0.6};
   bool allow_fixed_setpoint_diagnostic_{false};
+  bool fixed_vertical_only_diagnostic_{false};
   Vec3 map_origin_;
   Mode mode_{Mode::DISABLED};
   ExecutorRequestedMode requested_mode_{ExecutorRequestedMode::DISABLED};

@@ -242,6 +242,19 @@ struct TrajectoryState
   double yaw{0.0};
 };
 
+struct PositionControlSetpoint
+{
+  std::array<double, 3> position;
+  std::array<double, 3> velocity;
+  std::array<double, 3> acceleration;
+  double yaw{0.0};
+  double yawspeed{0.0};
+};
+
+PositionControlSetpoint fixedDiagnosticControlSetpoint(
+  const TrajectoryState & state_ned,
+  bool vertical_only);
+
 class UniformBsplineTrajectory
 {
 public:
