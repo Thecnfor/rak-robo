@@ -70,5 +70,14 @@
     "change": "replace the narrow two-pad support with a static non-jointed launch cradle that constrains lateral slip until vertical clearance",
     "do_not_change_yet": ["PX4 rate gains", "MPC_TKO_RAMP_T", "EGO planner"],
     "acceptance": "+0.10 m fixed step without envelope abort, return inside landing region, LAND and disarm"
+  },
+  "acceptance_evidence_still_required": {
+    "scene_verified_landing_region": true,
+    "hold_xy_error_max_m": 0.1,
+    "hold_speed_max_mps": 0.05,
+    "actuator_saturation": false,
+    "ekf_innovation_summary": "not yet extracted",
+    "successful_command_ack_count": 5,
+    "status": "not satisfied by rounds 1-4"
   }
 }

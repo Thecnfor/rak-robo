@@ -84,8 +84,10 @@ public:
     visual_velocity_subscription_ = create_subscription<geometry_msgs::msg::TwistStamped>(
       "/drone/navigation/visual_velocity", rclcpp::QoS(10),
       std::bind(&TrajectoryExecutorNode::onVisualVelocity, this, std::placeholders::_1));
+    const auto fixed_setpoint_topic = declare_parameter<std::string>(
+      "fixed_setpoint_topic", "/drone/navigation/fixed_setpoint");
     fixed_setpoint_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      "/drone/navigation/fixed_setpoint", rclcpp::QoS(1).transient_local(),
+      fixed_setpoint_topic, rclcpp::QoS(1).transient_local(),
       std::bind(&TrajectoryExecutorNode::onFixedSetpoint, this, std::placeholders::_1));
     odometry_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
       "/drone/navigation/odometry", rclcpp::QoS(20),

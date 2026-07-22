@@ -10,6 +10,7 @@ from math import asin, atan2, copysign, degrees, isfinite, sqrt
 
 
 CONTINUOUS_FLIGHT_TOPICS = (
+    "actuator_motors",
     "clock",
     "raw_pose",
     "raw_twist",
@@ -19,6 +20,16 @@ CONTINUOUS_FLIGHT_TOPICS = (
     "nav_odometry",
     "planner_state",
 )
+
+
+def successful_command_ack(text: str) -> bool:
+    """Accept only an explicitly successful PX4 command acknowledgement."""
+    tokens = {}
+    for token in text.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            tokens[key] = value
+    return "command" in tokens and tokens.get("result") == "0"
 
 
 def stale_flight_topics(
@@ -178,6 +189,40 @@ class LandingRegion:
             <= self.half_extents_xy[index] + 1e-9
             for index in range(2)
         )
+
+
+def verified_landing_region_available(region: LandingRegion, verified: bool) -> bool:
+    """A numerically valid rectangle is not evidence that its surface is safe."""
+    return bool(verified) and region.valid()
+
+
+def actuator_outputs_saturated(
+    outputs,
+    saturation_threshold: float = 0.95,
+) -> bool:
+    """Treat any finite normalized motor output at the configured limit as saturated."""
+    if not 0.0 < saturation_threshold <= 1.0:
+        return True
+    finite_outputs = [abs(value) for value in outputs if isfinite(value)]
+    return not finite_outputs or max(finite_outputs) >= saturation_threshold
+
+
+def hold_acceptance_passes(
+    horizontal_error_m: float,
+    altitude_error_m: float,
+    speed_mps: float,
+    saturation_seen: bool,
+    horizontal_tolerance_m: float = 0.10,
+    altitude_tolerance_m: float = 0.05,
+    max_speed_mps: float = 0.05,
+) -> bool:
+    """Require every sample in the timed HOLD window to satisfy the exit gate."""
+    return (
+        0.0 <= horizontal_error_m <= horizontal_tolerance_m
+        and 0.0 <= altitude_error_m <= altitude_tolerance_m
+        and 0.0 <= speed_mps <= max_speed_mps
+        and not saturation_seen
+    )
 
 
 def prearm_pose_allowed(

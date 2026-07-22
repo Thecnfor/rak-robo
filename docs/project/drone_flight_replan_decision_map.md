@@ -306,6 +306,12 @@ vehicle still tips/slides off the support, then the controller saturates. The
 current physical blocker is the narrow 0.05 m X contact footprint combined with
 PX4's 3 s takeoff ramp; redesign the static support as a non-jointed launch
 cradle and only then test `MPC_TKO_RAMP_T` or rate gains one group at a time.
+The diagnostic probe now treats the 10 s HOLD criteria as hard per-sample gates,
+observes normalized motor output for saturation, and rechecks the measured
+touchdown after disarm. A numerically valid rectangle is no longer sufficient:
+arming requires an explicitly supplied, scene-verified landing region. EKF
+innovation extraction and the five-command-ACK acceptance summary remain required
+evidence for the next successful run.
 
 ## #11: How are EGO replans handed to an active trajectory continuously?
 

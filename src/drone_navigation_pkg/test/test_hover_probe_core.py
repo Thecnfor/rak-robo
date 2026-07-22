@@ -117,6 +117,25 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(
             CORE.LandingRegion((0.0, 0.0), (0.0, 0.1)).valid()
         )
+        self.assertFalse(CORE.verified_landing_region_available(region, False))
+        self.assertTrue(CORE.verified_landing_region_available(region, True))
+
+    def test_actuator_saturation_requires_finite_outputs_below_limit(self):
+        self.assertFalse(CORE.actuator_outputs_saturated([0.2, 0.4, 0.6, 0.8]))
+        self.assertTrue(CORE.actuator_outputs_saturated([0.2, 0.4, 0.95, 0.8]))
+        self.assertFalse(
+            CORE.actuator_outputs_saturated([float('nan'), 0.2, 0.3, 0.4])
+        )
+        self.assertTrue(
+            CORE.actuator_outputs_saturated([float('nan')] * 4)
+        )
+
+    def test_hold_acceptance_rejects_error_speed_and_saturation(self):
+        self.assertTrue(CORE.hold_acceptance_passes(0.10, 0.05, 0.05, False))
+        self.assertFalse(CORE.hold_acceptance_passes(0.101, 0.05, 0.05, False))
+        self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.051, 0.05, False))
+        self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.05, 0.051, False))
+        self.assertFalse(CORE.hold_acceptance_passes(0.10, 0.05, 0.05, True))
 
     def test_startup_reset_requires_disabled_loiter_disarmed_and_landed(self):
         self.assertTrue(CORE.startup_reset_ready("DISABLED", True, False, True))
@@ -128,6 +147,7 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.startup_reset_ready("DISABLED", True, False, False))
 
     def test_runtime_liveness_uses_continuous_topics_not_discrete_px4_state(self):
+        self.assertIn("actuator_motors", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertIn("px4_sensor", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertIn("px4_odometry", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertNotIn("px4_status", CORE.CONTINUOUS_FLIGHT_TOPICS)
@@ -135,6 +155,7 @@ class HoverProbeCoreTest(unittest.TestCase):
 
     def test_clock_uses_independent_stale_timeout(self):
         ages = {
+            "actuator_motors": 0.1,
             "clock": 2.0,
             "raw_pose": 0.1,
             "raw_twist": 0.1,
@@ -159,6 +180,11 @@ class HoverProbeCoreTest(unittest.TestCase):
             CORE.stale_flight_topics(ages, 1.5, 5.0),
             ["px4_sensor"],
         )
+
+    def test_command_ack_requires_command_and_zero_result(self):
+        self.assertTrue(CORE.successful_command_ack("command=176 result=0"))
+        self.assertFalse(CORE.successful_command_ack("command=176 result=1"))
+        self.assertFalse(CORE.successful_command_ack("result=0"))
 
     def test_parses_cargo_boolean_tokens(self):
         text = "payload_locked=True prearm_support=false"

@@ -196,6 +196,11 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p output_path:=/tmp/prearm_support_acceptance.json
 ```
 
+`landing_region_verified` 默认是 `false`，因此探针会报告落区门未通过并禁止解锁。
+只有从当前 USD 桌面/托架世界包围盒量出落区、确认矩形完全位于可承重表面后，才能
+同时传入 `landing_region_center`、`landing_half_extents` 并设置
+`-p landing_region_verified:=true`；不得用实时机体位置自动重设落区中心。
+
 固定设定点诊断默认关闭，只有定位 PX4/机体模型问题时显式开启；它仍通过 supervisor
 提交意图，`trajectory_executor` 保持 `/fmu/in/*` 唯一写入者：
 
@@ -205,13 +210,18 @@ ros2 launch drone_navigation_pkg navigation.launch.py \
 ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p preflight_only:=false \
   -p fixed_setpoint_diagnostic:=true \
+  -p landing_region_center:="[4.55,-0.38]" \
+  -p landing_half_extents:="[0.18,0.18]" \
+  -p landing_region_verified:=true \
   -p fixed_step_clearances:="[0.10]" \
   -p fixed_hold_altitude:=1.23
 ```
 
 探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
 里程计仍为 1.5 s；固定阶梯若水平偏移 >0.20 m、低于 home >0.10 m、速度 >0.5 m/s
-或倾角 >20°，会先尝试返回落区再 LAND。中断或降落确认延迟时，进程持续发布安全
+或倾角 >20°，会先尝试返回落区再 LAND。验收 HOLD 期间任一采样若 XY 误差 >0.10 m、
+高度误差 >0.05 m、速度 >0.05 m/s 或归一化电机输出达到 0.95，整轮判失败；解除锁定
+后仍用最终实测触地点复核落区。中断或降落确认延迟时，进程持续发布安全
 意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。2026-07-22 的四轮证据见
 `docs/project/drone_fixed_setpoint_evidence_2026-07-22.json`；当前不得继续放飞，须先
 把窄支架改成无 joint 的横向限位起飞托架并重做 +0.10 m 票据。

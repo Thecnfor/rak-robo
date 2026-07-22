@@ -85,8 +85,10 @@ public:
       "/drone/navigation/state", rclcpp::QoS(10).transient_local());
     goal_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/drone/navigation/goal", rclcpp::QoS(1).transient_local());
+    const auto fixed_setpoint_topic = declare_parameter<std::string>(
+      "fixed_setpoint_topic", "/drone/navigation/fixed_setpoint");
     fixed_setpoint_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
-      "/drone/navigation/fixed_setpoint", rclcpp::QoS(1).transient_local());
+      fixed_setpoint_topic, rclcpp::QoS(1).transient_local());
     control_mode_publisher_ = create_publisher<std_msgs::msg::String>(
       "/drone/navigation/control_mode", rclcpp::QoS(10).transient_local());
     cargo_command_publisher_ = create_publisher<std_msgs::msg::String>(

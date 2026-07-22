@@ -71,6 +71,7 @@ uXRCE-DDS 按 `px4_msgs/*.msg` 的 `MESSAGE_VERSION` 决定是否给 topic 加 `
 | `/fmu/out/vehicle_status_v1` (MESSAGE_VERSION=1) | `/fmu/in/trajectory_setpoint` |
 | `/fmu/out/vehicle_command_ack` | `/fmu/in/vehicle_command` |
 | `/fmu/out/vehicle_land_detected` | 仅 executor 可写 |
+| `/fmu/out/actuator_motors` | （只读电机饱和度验收） |
 
 PX4 输出订阅使用 `BEST_EFFORT/VOLATILE`。Offboard 以 20 Hz 发送，先预流至少
 1 秒，再请求 Offboard，收到状态反馈后解锁。

@@ -18,6 +18,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
 from px4_msgs.msg import (
+    ActuatorMotors,
     SensorCombined,
     VehicleLandDetected,
     VehicleOdometry,
@@ -42,9 +43,11 @@ from hover_probe_core import (
     PrearmPoseSample,
     RateWindow,
     StabilityWindow,
-    ground_observation_usable,
+    actuator_outputs_saturated,
     fixed_step_reached,
     fixed_step_envelope_safe,
+    ground_observation_usable,
+    hold_acceptance_passes,
     normalized_node_names,
     parse_bool_token,
     phase_elapsed_seconds,
@@ -54,8 +57,10 @@ from hover_probe_core import (
     sole_writer_is,
     stale_flight_topics,
     startup_reset_ready,
+    successful_command_ack,
     takeoff_goal_reached,
     update_executor_lifecycle,
+    verified_landing_region_available,
 )
 
 
@@ -106,6 +111,28 @@ class HoverProbe(Node):
                 "landing_half_extents", [0.18, 0.18]
             ).value
         )
+        landing_center = tuple(
+            float(value)
+            for value in self.declare_parameter(
+                "landing_region_center", [4.55, -0.38]
+            ).value
+        )
+        self.landing_region_verified = bool(
+            self.declare_parameter("landing_region_verified", False).value
+        )
+        self.actuator_saturation_threshold = float(
+            self.declare_parameter("actuator_saturation_threshold", 0.95).value
+        )
+        actuator_motors_topic = str(
+            self.declare_parameter(
+                "actuator_motors_topic", "/fmu/out/actuator_motors"
+            ).value
+        )
+        command_ack_topic = str(
+            self.declare_parameter(
+                "px4_command_ack_topic", "/drone/navigation/px4_command_ack"
+            ).value
+        )
         self.landing_return_timeout = float(
             self.declare_parameter("landing_return_timeout", 15.0).value
         )
@@ -129,7 +156,7 @@ class HoverProbe(Node):
             ),
         )
         self.landing_region = LandingRegion(
-            center_xy=tuple(self.prearm_limits.expected_position[:2]),
+            center_xy=landing_center,
             half_extents_xy=landing_half_extents,
         )
         self.output_path = Path(
@@ -162,6 +189,7 @@ class HoverProbe(Node):
             or self.fixed_step_settle_seconds <= 0.0
             or self.landing_return_timeout <= 0.0
             or not self.landing_region.valid()
+            or not 0.0 < self.actuator_saturation_threshold <= 1.0
         ):
             raise ValueError("probe durations and timeouts must be positive")
 
@@ -187,6 +215,12 @@ class HoverProbe(Node):
             PointCloud2,
             "/avoidance/lidar/pointcloud",
             lambda _: self._mark("pointcloud"),
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            ActuatorMotors,
+            actuator_motors_topic,
+            self._on_actuator_motors,
             qos_profile_sensor_data,
         )
         self.create_subscription(
@@ -225,11 +259,15 @@ class HoverProbe(Node):
         self.create_subscription(
             String, "/drone/navigation/planner_state", self._on_planner_state, transient
         )
+        self.create_subscription(
+            String, command_ack_topic, self._on_command_ack, 10
+        )
         self.create_subscription(String, "/cargo_bay/status", self._on_cargo_status, 10)
 
         self.trackers = {
             name: RateWindow(5.0)
             for name in (
+                "actuator_motors",
                 "clock",
                 "raw_pose",
                 "raw_twist",
@@ -281,6 +319,11 @@ class HoverProbe(Node):
         self.hold_max_horizontal_error = 0.0
         self.hold_max_altitude_error = 0.0
         self.hold_max_speed = 0.0
+        self.hold_max_actuator_output = 0.0
+        self.hold_saturation_seen = False
+        self.have_actuator_motors = False
+        self.command_acks = []
+        self.round_ack_start = 0
         self.abort_reset_since = None
         self.abort_landing_timeout_reported = False
         self.commanded_goal = None
@@ -336,6 +379,25 @@ class HoverProbe(Node):
     def _on_vehicle_status(self, message):
         self.vehicle_status = message
         self._mark("px4_status")
+
+    def _on_actuator_motors(self, message):
+        outputs = [value for value in message.control if math.isfinite(value)]
+        self.have_actuator_motors = bool(outputs)
+        self._mark("actuator_motors")
+        current_max = max((abs(value) for value in outputs), default=0.0)
+        if self.phase in {"FIXED_HOLD", "HOLD"}:
+            self.hold_max_actuator_output = max(
+                self.hold_max_actuator_output, current_max
+            )
+            self.hold_saturation_seen = self.hold_saturation_seen or (
+                actuator_outputs_saturated(
+                    outputs, self.actuator_saturation_threshold
+                )
+            )
+
+    def _on_command_ack(self, message):
+        self.command_acks.append(message.data)
+        self._event("px4_command_ack", value=message.data)
 
     def _on_land_detected(self, message):
         self.land_status = message
@@ -496,7 +558,14 @@ class HoverProbe(Node):
                     self.executor_state, "fixed_setpoint_enabled"
                 ) is True
             ),
-            "landing_region_valid": self.landing_region.valid(),
+            "landing_region_verified": verified_landing_region_available(
+                self.landing_region, self.landing_region_verified
+            ),
+            "actuator_feedback_available": self.have_actuator_motors,
+            "actuator_feedback_fresh": (
+                rates["actuator_motors"] >= 4.0
+                and ages["actuator_motors"] <= 0.4
+            ),
             "px4_ready": bool(status and status.pre_flight_checks_pass and not status.failsafe),
             "disarmed": not self._armed(),
             "landed_or_supported": grounded,
@@ -539,6 +608,7 @@ class HoverProbe(Node):
             "landing_region": {
                 "center_xy": self.landing_region.center_xy,
                 "half_extents_xy": self.landing_region.half_extents_xy,
+                "verified": self.landing_region_verified,
             },
         }
         return gates, details
@@ -547,6 +617,9 @@ class HoverProbe(Node):
         self.phase = phase
         self.phase_started = self._now()
         self.phase_started_sim_ns = self.clock_last_ns
+        if phase in {"FIXED_HOLD", "HOLD"}:
+            self.hold_max_actuator_output = 0.0
+            self.hold_saturation_seen = False
         self._event("phase", phase=phase, round=self.current_round)
 
     def _phase_elapsed(self, now, use_sim_time=False):
@@ -607,10 +680,7 @@ class HoverProbe(Node):
         self.current_round += 1
         self.home_nav = tuple(self.nav_position)
         self.home_raw = tuple(self.raw_position)
-        self.landing_region = LandingRegion(
-            center_xy=tuple(self.home_raw[:2]),
-            half_extents_xy=self.landing_region.half_extents_xy,
-        )
+        self.round_ack_start = len(self.command_acks)
         self.commanded_goal = tuple(self.home_nav)
         self.fixed_step_index = 0
         self.fixed_settle_since = None
@@ -621,6 +691,8 @@ class HoverProbe(Node):
         self.hold_max_horizontal_error = 0.0
         self.hold_max_altitude_error = 0.0
         self.hold_max_speed = 0.0
+        self.hold_max_actuator_output = 0.0
+        self.hold_saturation_seen = False
         self._set_phase("ARM")
 
     def _abort(self, reason, emergency=False):
@@ -683,8 +755,10 @@ class HoverProbe(Node):
             "landing_region": {
                 "center_xy": self.landing_region.center_xy,
                 "half_extents_xy": self.landing_region.half_extents_xy,
+                "verified": self.landing_region_verified,
             },
             "touchdown_position": self.touchdown_position,
+            "command_acks": self.command_acks,
             "preflight_gates": self.last_gates,
             "rounds": self.round_results,
             "events": self.events,
@@ -841,8 +915,19 @@ class HoverProbe(Node):
                 self.hold_max_altitude_error, altitude_error
             )
             self.hold_max_speed = max(self.hold_max_speed, self.raw_speed)
-            if horizontal > 0.30 or altitude_error > 0.20:
-                self._abort("fixed hold envelope violated")
+            if not hold_acceptance_passes(
+                horizontal,
+                altitude_error,
+                self.raw_speed,
+                self.hold_saturation_seen,
+            ):
+                self._abort(
+                    "fixed hold acceptance violated: "
+                    f"horizontal={horizontal:.3f}m "
+                    f"altitude={altitude_error:.3f}m "
+                    f"speed={self.raw_speed:.3f}m/s "
+                    f"actuator_max={self.hold_max_actuator_output:.3f}"
+                )
             elif self._phase_elapsed(now, use_sim_time=True) >= self.hover_seconds:
                 self.fixed_settle_since = None
                 self.fixed_settle_since_sim_ns = None
@@ -902,8 +987,13 @@ class HoverProbe(Node):
             self.hold_max_horizontal_error = max(self.hold_max_horizontal_error, horizontal)
             self.hold_max_altitude_error = max(self.hold_max_altitude_error, altitude_error)
             self.hold_max_speed = max(self.hold_max_speed, self.raw_speed)
-            if horizontal > 0.5 or self.raw_position[2] < self.home_raw[2] + 0.2:
-                self._abort("hover envelope violated")
+            if not hold_acceptance_passes(
+                horizontal,
+                altitude_error,
+                self.raw_speed,
+                self.hold_saturation_seen,
+            ):
+                self._abort("hover acceptance violated")
             elif self._phase_elapsed(now, use_sim_time=True) >= self.hover_seconds:
                 self._set_phase("LAND")
         elif self.phase == "LAND":
@@ -918,12 +1008,25 @@ class HoverProbe(Node):
             self._publish_mode("LAND")
             if self._landed() and not self._armed() and self.executor_lifecycle == "COMPLETE":
                 self.touchdown_position = tuple(self.raw_position) if self.raw_position else None
+                if (
+                    self.touchdown_position is None
+                    or not self.landing_region.contains(
+                        tuple(self.touchdown_position[:2])
+                    )
+                ):
+                    self._abort("touchdown outside verified landing region")
+                    return
                 self.round_results.append(
                     {
                         "round": self.current_round,
                         "max_horizontal_error_m": round(self.hold_max_horizontal_error, 4),
                         "max_altitude_error_m": round(self.hold_max_altitude_error, 4),
                         "max_speed_mps": round(self.hold_max_speed, 4),
+                        "max_actuator_output": round(
+                            self.hold_max_actuator_output, 4
+                        ),
+                        "actuator_saturation_seen": self.hold_saturation_seen,
+                        "touchdown_position": self.touchdown_position,
                         "landed": True,
                         "disarmed": True,
                     }
@@ -942,6 +1045,21 @@ class HoverProbe(Node):
                 == VehicleStatus.NAVIGATION_STATE_AUTO_LOITER
             )
             if self.executor_lifecycle == "DISABLED" and reset_mode_ready:
+                round_acks = self.command_acks[self.round_ack_start:]
+                successful_acks = [
+                    ack for ack in round_acks if successful_command_ack(ack)
+                ]
+                if self.round_results:
+                    self.round_results[-1]["command_acks"] = round_acks
+                    self.round_results[-1]["successful_command_ack_count"] = len(
+                        successful_acks
+                    )
+                if len(successful_acks) < 5:
+                    self._abort(
+                        "fewer than five successful PX4 command ACKs: "
+                        f"{len(successful_acks)}"
+                    )
+                    return
                 self._publish_mode("CLEAR")
                 if self.current_round >= self.rounds:
                     self._finish(True)
