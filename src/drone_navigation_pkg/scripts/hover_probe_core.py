@@ -17,6 +17,7 @@ CONTINUOUS_FLIGHT_TOPICS = (
     "px4_sensor",
     "px4_odometry",
     "nav_odometry",
+    "planner_state",
 )
 
 
@@ -49,6 +50,16 @@ def parse_bool_token(text: str, key: str):
         if value in {"false", "0", "no"}:
             return False
     return None
+
+
+def planner_map_ready(state: str, state_age_seconds: float, timeout: float) -> bool:
+    """Require a fresh planner state that proves a transformed map update."""
+    return (
+        timeout >= 0.0
+        and state_age_seconds >= 0.0
+        and state_age_seconds <= timeout
+        and parse_bool_token(state, "map_ready") is True
+    )
 
 
 def quaternion_roll_pitch_degrees(x: float, y: float, z: float, w: float):
@@ -108,6 +119,49 @@ class StabilityReport:
             and self.max_speed_mps <= max_speed_mps
             and self.max_tilt_deg <= max_tilt_deg
         )
+
+
+@dataclass(frozen=True)
+class PrearmPoseSample:
+    position: tuple
+    speed_mps: float
+    roll_deg: float
+    pitch_deg: float
+
+
+@dataclass(frozen=True)
+class PrearmPoseLimits:
+    expected_position: tuple
+    position_tolerance_m: float = 0.02
+    max_speed_mps: float = 0.05
+    max_tilt_deg: float = 3.0
+
+
+def prearm_pose_allowed(
+    sample: PrearmPoseSample,
+    limits: PrearmPoseLimits,
+) -> bool:
+    """Require the disarmed vehicle to occupy its calibrated support envelope."""
+    if len(sample.position) != 3 or len(limits.expected_position) != 3:
+        return False
+    if (
+        limits.position_tolerance_m < 0.0
+        or limits.max_speed_mps < 0.0
+        or limits.max_tilt_deg < 0.0
+    ):
+        return False
+    position_error = sqrt(
+        sum(
+            (sample.position[index] - limits.expected_position[index]) ** 2
+            for index in range(3)
+        )
+    )
+    return (
+        position_error <= limits.position_tolerance_m
+        and sample.speed_mps <= limits.max_speed_mps
+        and abs(sample.roll_deg) <= limits.max_tilt_deg
+        and abs(sample.pitch_deg) <= limits.max_tilt_deg
+    )
 
 
 class StabilityWindow:

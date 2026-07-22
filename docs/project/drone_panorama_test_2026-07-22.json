@@ -1,0 +1,112 @@
+{
+  "date": "2026-07-22",
+  "scope": "full host bringup, UAV transport, PX4, TF, mapping, planning, cargo and preflight-only safety",
+  "overall_result": "STATIC_CHAIN_PASS_FLIGHT_NOT_AUTHORIZED",
+  "flight_performed": false,
+  "environment": {
+    "isaac_service": "active",
+    "px4_container_health": "healthy",
+    "ros_domain_id": 45,
+    "rmw": "rmw_fastrtps_cpp"
+  },
+  "interface_audit": {
+    "artifact": "/tmp/drone_panorama_interface_20260722.json",
+    "ok": true,
+    "missing": [],
+    "unpublished": [],
+    "disconnected_commands": [],
+    "unique_fmu_writer": true,
+    "fmu_writer": "/trajectory_executor",
+    "disabled_fmu_input_frequency_hz": 0.0
+  },
+  "measured_frequencies_hz": {
+    "clock": 3.297,
+    "raw_pose": 13.13,
+    "raw_twist": 13.204,
+    "imu": 13.202,
+    "mag": 13.203,
+    "gps": 13.203,
+    "gps_twist": 13.203,
+    "lidar_pointcloud": 3.265,
+    "down_camera_image": 2.976,
+    "px4_vehicle_odometry": 5.219,
+    "tf": 5.46
+  },
+  "tf_and_planner": {
+    "startup_discovery_warning_seen": true,
+    "map_to_avoidance_lidar_available_after_startup": true,
+    "translation": [4.55, -0.38, 1.25],
+    "rotation_rpy_degrees": [0.0, 0.0, 90.0],
+    "test_goal": [4.55, -0.38, 1.3],
+    "planner_state": "ACTIVE",
+    "trajectory_generated": true,
+    "executor_lifecycle": "DISABLED",
+    "offboard_commands_sent": false,
+    "continuous_replanning_observed": true
+  },
+  "preflight": {
+    "artifact": "/tmp/drone_panorama_preflight_20260722.json",
+    "preflight_only": true,
+    "success": true,
+    "failed_gates": [],
+    "prearm_pose_error_m": 0.000117,
+    "prearm_speed_mps": 0.001704,
+    "payload_locked": true,
+    "prearm_support": true,
+    "side_door_closed": true,
+    "bottom_door_closed": true,
+    "sole_px4_writer": true,
+    "px4_pre_flight_checks_pass": true,
+    "px4_arming_state": 1,
+    "px4_failsafe": false
+  },
+  "automated_tests": {
+    "packages": [
+      "drone_navigation_pkg",
+      "perception_competition_pkg",
+      "competition_orchestrator_pkg",
+      "bridge_competition_pkg"
+    ],
+    "tests_passed": 52,
+    "failures": 0
+  },
+  "findings": [
+    {
+      "severity": "BLOCKER",
+      "id": "ground_state_qos",
+      "detail": "/arena/ground/state publisher is VOLATILE while flight_supervisor and air_ground_orchestrator require TRANSIENT_LOCAL; the ground-to-air mission handoff cannot connect."
+    },
+    {
+      "severity": "BLOCKER_FOR_FLIGHT",
+      "id": "planner_readiness_gate",
+      "detail": "TF and pointcloud planning work after startup, but arming still lacks an explicit successful-transform/map-update/TF-age readiness contract."
+    },
+    {
+      "severity": "BLOCKER_FOR_FLIGHT",
+      "id": "tracking_and_landing",
+      "detail": "Horizontal tracking convergence and verified touchdown-region tickets remain open after the previous off-table landing."
+    },
+    {
+      "severity": "WARNING",
+      "id": "continuous_replanning",
+      "detail": "A fixed test goal caused approximately 4-5 trajectory publications per second; splice continuity and material-improvement gates remain open."
+    },
+    {
+      "severity": "WARNING",
+      "id": "shutdown_double_call",
+      "detail": "Seven non-UAV Python nodes exited with rcl_shutdown already called when the full bringup received Ctrl-C; UAV C++ nodes and drone_target_detector exited cleanly."
+    },
+    {
+      "severity": "WARNING",
+      "id": "ground_perception_stub",
+      "detail": "The full host bringup reported YOLOE and depth-pose ground perception in stub mode."
+    }
+  ],
+  "final_state": {
+    "host_bringup_stopped": true,
+    "navigation_writers_stopped": true,
+    "isaac_service": "active",
+    "px4_container": "healthy",
+    "vehicle_armed": false
+  }
+}

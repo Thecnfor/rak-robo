@@ -155,6 +155,15 @@ deliberately limited to z=1.30/1.45 m. `round1i` held within 0.0901 m horizontal
 but still reached 0.0827 m/s and displaced 0.2756 m during landing. The next ticket
 is speed-settling/controller and landing calibration, then 1.8 m / 30 s and repeat trials.
 
+The 2026-07-22 `round2` rerun did not pass: it reached z=1.325 m but failed to
+converge within the 0.15 m horizontal takeoff envelope before the 15 s simulated
+timeout. The safety chain requested NAV_LAND, received all five command ACKs with
+`result=0`, disarmed and reset, but the vehicle landed off the table at z=0.263 m.
+Evidence is in `bags/drone_flight_test_20260722_round2`,
+`/tmp/drone_flight_test_round2_20260722.json` and PX4 ULog
+`2026-07-22/11_04_46.ulg`. This run reopens the tracking and landing portions of
+the milestone; it must not be counted as a successful hover.
+
 ## #7: What keeps the drone valid before arming?
 
 Blocked by: #2
@@ -189,3 +198,155 @@ Resolved on 2026-07-21.
 
 Ticket #3 is now unblocked. PX4 estimator work must use this supported, settled
 initial state and must not restore broad EKF/GPS gate bypasses.
+
+## #8: How is a valid prearm pose restored and enforced after an off-table landing?
+
+Blocked by: #7
+Type: Prototype
+
+### Question
+
+How will scene reset restore the official spawn pose, and how will preflight prove
+that the vehicle is physically above the support rather than merely observing that
+the support prim exists?
+
+### Answer
+
+Resolved on 2026-07-22.
+
+- The probe and supervisor now share a calibrated Isaac raw-pose envelope around
+  `(4.55,-0.38,1.13)`: position error <=0.02 m, speed <=0.05 m/s and absolute
+  roll/pitch <=3 degrees. Missing or stale raw pose/twist also fails closed.
+- Ground arming requires the envelope, while an already armed Offboard flight
+  bypasses it so natural departure from the support cannot interrupt setpoints.
+  `/drone/navigation/state` exposes `prearm_pose_valid=true|false`.
+- Before scene reset, the off-table pose `(5.1876,-0.3052,0.2630)` had 1.078791 m
+  position error. After cargo setup, the pose envelope was the only failed gate;
+  executor lifecycle remained `DISABLED` and PX4 remained disarmed.
+- After a controlled Isaac/PX4 restart, raw pose returned to
+  `(4.549878,-0.379997,1.129992)`. The successful preflight-only sample had
+  0.000094 m error, 0.003547 m/s speed and 0.0395 degree maximum tilt. It exited
+  successfully without entering ARM.
+
+The compact evidence is
+[`prearm_pose_gate_evidence_2026-07-22.json`](prearm_pose_gate_evidence_2026-07-22.json).
+`prearm_support=true` remains an existence check and never substitutes for this
+physical pose gate. The repair frontier advances to #9.
+
+## #9: When is the map/lidar transform and local map actually ready?
+
+Blocked by: #3
+Type: Prototype
+
+### Question
+
+How will bringup distinguish a transient TF discovery race from a missing transform,
+and prevent arming until point clouds have been transformed and ingested?
+
+### Answer
+
+Resolved on 2026-07-22.
+
+- The planner now reports `map_ready`, `map_age` and `tf_age` only from a
+  successfully transformed cloud that was ingested into the rolling voxel map.
+  Merely receiving `/avoidance/lidar/pointcloud` cannot satisfy the gate.
+- Ground arming requires a fresh positive planner state no older than 0.60 s in
+  both the supervisor and the independent hover probe. Missing, malformed,
+  negative or stale evidence fails closed. Once PX4 is armed, this ground-only
+  gate is bypassed so a transient planning update cannot stop the Offboard stream.
+- The same `planner_map_timeout` parameter drives planner publication,
+  supervisor gating and probe acceptance. During the one-second Offboard
+  prestream, an unarmed vehicle continuously rechecks readiness; loss of the gate
+  returns the state machine to `PREFLIGHT` and disables the executor instead of
+  completing ARM. `map_ready` is parsed as an exact boolean token, so malformed or
+  conflicting tokens fail closed.
+- The live chain eventually provides `map -> avoidance_base_link` and the static
+  `avoidance_base_link -> avoidance_lidar` transform. The initial warning that
+  `map` does not exist is a discovery-order race: the planner retries and does
+  not claim readiness until the transform succeeds.
+- Runtime validation reported `map_ready=true map_age=0.000000 tf_age=0.000000`;
+  the preflight-only probe then passed with a planner-state age of about 0.045 s
+  and an observed rate of about 4.99 Hz, without entering ARM.
+
+The repair frontier advances to #10. This closes unsafe map readiness, but does
+not explain the horizontal tracking oscillation observed during flight.
+
+## #10: What produces the horizontal tracking oscillation?
+
+Blocked by: #8, #9
+Type: Prototype
+
+### Question
+
+Can PX4 hold a fixed position without EGO replanning, and which vehicle-model or
+PX4 controller parameters must change to meet the 0.05 m/s settling requirement?
+
+### Answer
+
+Open. Bag analysis rules out a gross frame/origin error: PX4-derived navigation
+odometry tracked Isaac ground truth with roughly centimetre-scale mean error, and
+all EGO trajectories ended at the fixed target `(5.004, -0.222, 1.300)`. Run a
+fixed-setpoint step ladder with EGO updates frozen: supported idle, +0.10 m,
++0.20 m and 10 s HOLD. Record command, PX4 odometry, Isaac truth, attitude,
+actuator saturation and EKF innovations. Tune/validate mass, inertia, rotor thrust
+curve, hover thrust and PX4 MPC gains one variable group at a time. Exit only when
+XY error <=0.10 m, speed <=0.05 m/s and no motor saturation are maintained for
+10 simulated seconds.
+
+## #11: How are EGO replans handed to an active trajectory continuously?
+
+Blocked by: #4, #10
+Type: Prototype
+
+### Question
+
+What continuity and priority checks replace the current time-only four-second
+replan acceptance rule?
+
+### Answer
+
+Open. The planner published about 4.6 trajectories/s during `round2`; endpoints
+were fixed, but each plan restarted from the current oscillating state. Require
+position/velocity/acceleration continuity at the splice point, reject non-urgent
+updates that do not materially improve the active path, and allow immediate
+replacement only for collision risk. Unit-test bounded setpoint jumps before
+reconnecting live pointcloud planning.
+
+## #12: Where may normal and emergency landing occur?
+
+Blocked by: #8, #10
+Type: Discuss
+
+### Question
+
+How will normal LAND return to a verified touchdown region without weakening the
+immediate failsafe path?
+
+### Answer
+
+Open. Define a table/support landing polygon and horizontal/vertical geofence.
+Normal mission completion must return above home, settle inside the polygon, then
+request NAV_LAND. Tracking timeout outside the polygon must select a separately
+verified emergency landing policy; transport loss or PX4 failsafe still requests
+NAV_LAND immediately. Arming is forbidden when no valid touchdown policy is
+available. The probe must record touchdown position and fail if it leaves the
+selected region.
+
+## #13: Which staged reruns close M9.4 after the repair?
+
+Blocked by: #8, #9, #10, #11, #12
+Type: Discuss
+
+### Question
+
+What sequence proves the repaired chain before returning to obstacle navigation?
+
+### Answer
+
+Open. Required order: offline/unit tests; reset/support rejection test; transformed
+map readiness test; fixed-setpoint +0.10/+0.20 m tests; 1.30 m 10 s HOLD with safe
+landing; 1.80 m 30 s HOLD; then three consecutive EGO takeoff/return/landing runs.
+Every flight must preserve the unique `/fmu/in/*` writer, five successful command
+ACKs, no failsafe, no actuator saturation, speed <=0.05 m/s in the acceptance
+window, and touchdown inside the selected polygon. Only then resume obstacle and
+mission work.

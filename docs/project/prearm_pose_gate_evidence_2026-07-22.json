@@ -1,0 +1,48 @@
+{
+  "ticket": 8,
+  "date": "2026-07-22",
+  "limits": {
+    "expected_position": [4.55, -0.38, 1.13],
+    "position_tolerance_m": 0.02,
+    "max_speed_mps": 0.05,
+    "max_tilt_deg": 3.0
+  },
+  "floor_rejection": {
+    "source": "/tmp/prearm_floor_rejection_20260722.json",
+    "position": [5.187564, -0.305156, 0.262992],
+    "position_error_m": 1.078791,
+    "speed_mps": 0.001937,
+    "max_tilt_deg": 0.0259,
+    "calibrated_spawn_pose": false,
+    "only_remaining_failed_gate_after_cargo_setup": "calibrated_spawn_pose",
+    "executor_lifecycle": "DISABLED",
+    "supervisor_state": "IDLE prearm_pose_valid=false"
+  },
+  "supported_acceptance": {
+    "source": "/tmp/prearm_support_acceptance_20260722.json",
+    "position": [4.549878, -0.379997, 1.129992],
+    "position_error_m": 0.000094,
+    "speed_mps": 0.003547,
+    "max_tilt_deg": 0.0395,
+    "four_second_max_drift_m": 0.000063,
+    "four_second_max_speed_mps": 0.007127,
+    "calibrated_spawn_pose": true,
+    "preflight_only_success": true,
+    "executor_lifecycle": "DISABLED",
+    "supervisor_state": "IDLE prearm_pose_valid=true"
+  },
+  "scene": {
+    "service": "isaacsim51-scene.service",
+    "spawn_logged": [4.55, -0.38, 1.13],
+    "payload_locked": true,
+    "prearm_support_ready": true
+  },
+  "px4": {
+    "container": "px4-sitl",
+    "health": "healthy",
+    "arming_state": 1,
+    "failsafe": false,
+    "pre_flight_checks_pass": true
+  },
+  "flight_performed": false
+}

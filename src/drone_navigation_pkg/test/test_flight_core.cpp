@@ -23,10 +23,12 @@ using drone_navigation::UniformBsplineTrajectory;
 using drone_navigation::Vec3;
 using drone_navigation::VoxelPlanner;
 using drone_navigation::executorSafetyAction;
+using drone_navigation::boolTokenValue;
 
 namespace
 {
 constexpr double kTolerance = 1e-6;
+constexpr double kPi = 3.14159265358979323846;
 }
 
 TEST(CoordinateFrames, ConvertsNedFrdToEnuFlu)
@@ -139,6 +141,36 @@ TEST(FlightSupervisor, EnforcesDoorAndDataFreshnessSafetyGates)
   inputs.odometry_age_seconds = 1.1;
   const auto lost = supervisor.update(inputs);
   EXPECT_TRUE(lost.request_land);
+}
+
+TEST(FlightSupervisor, RevokesArmRequestWhenReadinessIsLostDuringPrestream)
+{
+  FlightSupervisor supervisor;
+  SupervisorInputs inputs;
+  inputs.mission_requested = true;
+  inputs.ground_task_complete = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::PREFLIGHT);
+
+  inputs.side_door_closed = true;
+  inputs.px4_ready = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::ARMING);
+  EXPECT_TRUE(supervisor.update(inputs).request_arm_offboard);
+
+  inputs.px4_ready = false;
+  const auto revoked = supervisor.update(inputs);
+  EXPECT_EQ(revoked.phase, FlightPhase::PREFLIGHT);
+  EXPECT_FALSE(revoked.request_arm_offboard);
+  EXPECT_FALSE(revoked.reason.empty());
+}
+
+TEST(BoolTokenValue, RejectsMalformedOrAmbiguousPlannerEvidence)
+{
+  EXPECT_EQ(boolTokenValue("ACTIVE map_ready=true map_age=0.1", "map_ready"), true);
+  EXPECT_EQ(boolTokenValue("ACTIVE map_ready=false", "map_ready"), false);
+  EXPECT_FALSE(boolTokenValue("ACTIVE not_map_ready=true", "map_ready").has_value());
+  EXPECT_FALSE(boolTokenValue("ACTIVE map_ready=trueish", "map_ready").has_value());
+  EXPECT_FALSE(
+    boolTokenValue("ACTIVE map_ready=true map_ready=false", "map_ready").has_value());
 }
 
 TEST(FlightSupervisor, RunsNominalMissionSequence)
@@ -254,17 +286,55 @@ TEST(ExecutorLanding, DisarmsOnlyAfterConfirmedGroundDelay)
 TEST(OperatorArmGate, AllowsGroundArmAndAlreadyActiveOffboardTracking)
 {
   EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
-    true, true, true, true, true, false, false));
+    true, true, true, true, true, true, false, false));
+  EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
+    true, true, true, false, true, true, false, false));
   EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
-    true, true, true, true, false, true, true));
+    true, true, true, false, true, false, true, true));
   EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
-    true, true, true, true, true, true, true));
+    true, true, true, false, true, true, true, true));
   EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
-    true, true, true, true, false, true, false));
+    true, true, true, true, true, false, true, false));
   EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
-    true, false, true, true, true, false, false));
+    true, false, true, true, true, true, false, false));
   EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
-    false, true, true, true, true, false, false));
+    false, true, true, true, true, true, false, false));
+}
+
+TEST(PrearmPoseGate, RequiresCalibratedSpawnSpeedAndTiltEnvelope)
+{
+  drone_navigation::PrearmPoseLimits limits;
+  limits.expected_position = {4.55, -0.38, 1.13};
+  limits.position_tolerance = 0.02;
+  limits.max_speed = 0.05;
+  limits.max_tilt_radians = 3.0 * kPi / 180.0;
+
+  drone_navigation::PrearmPoseSample sample;
+  sample.position = {4.5513, -0.3819, 1.1299};
+  sample.velocity = {0.01, 0.0, 0.0};
+  sample.roll_radians = 0.05 * kPi / 180.0;
+  sample.pitch_radians = -0.03 * kPi / 180.0;
+  EXPECT_TRUE(drone_navigation::prearmPoseAllowed(sample, limits));
+
+  sample.position = {5.1876, -0.3052, 0.2630};
+  EXPECT_FALSE(drone_navigation::prearmPoseAllowed(sample, limits));
+
+  sample.position = {4.5513, -0.3819, 1.1299};
+  sample.velocity = {0.051, 0.0, 0.0};
+  EXPECT_FALSE(drone_navigation::prearmPoseAllowed(sample, limits));
+
+  sample.velocity = {};
+  sample.roll_radians = 3.01 * kPi / 180.0;
+  EXPECT_FALSE(drone_navigation::prearmPoseAllowed(sample, limits));
+}
+
+TEST(PlannerMapGate, RequiresFreshSuccessfulMapUpdate)
+{
+  EXPECT_TRUE(drone_navigation::freshPlannerMapReady(true, true, 0.20, 0.60));
+  EXPECT_FALSE(drone_navigation::freshPlannerMapReady(false, true, 0.20, 0.60));
+  EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, false, 0.20, 0.60));
+  EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, true, 0.61, 0.60));
+  EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, true, 0.20, -0.01));
 }
 
 TEST(Px4DiscreteState, UsesCachedStateOnlyWhileContinuousTransportIsAlive)

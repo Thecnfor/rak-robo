@@ -128,6 +128,9 @@ DRONE_BACKEND=direct_rotor ros2 run bridge_competition_pkg \
 
 - `px4_map_origin`：PX4 local `(0,0,0)` 对应的 Isaac 世界 ENU 出生点；当前 X1 初值
   `[4.55,-0.38,1.13]`。
+- `prearm_spawn_position`：Isaac 原始世界位姿的合法起飞支架中心，当前同为
+  `[4.55,-0.38,1.13]`。预解锁还必须同时满足位置误差 ≤0.02 m、速度 ≤0.05 m/s、
+  横滚/俯仰绝对值 ≤3°；支架状态字符串不能替代这项实体位姿检查。
 - `drop_search_pose`：从最终 USD/比赛实景提取，当前 `[0,0,1.8]` 是占位。
 - `takeoff_height` 和 `virtual_ceiling`：按净空校准。
 - 相机必须确认 `/drone0/down_camera/color/image_raw` 是正下视；移动目标到图像四个方向，
@@ -146,7 +149,9 @@ ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py
 
 bringup 启动四个导航节点、视觉检测、地空协调和接口审计；Foxglove（8765）由独立
 systemd user service 常驻。默认不会自动解锁；只有 `/arena/ground/state` 为
-`COMPLETE|SUCCESS|GROUND_DONE` 后 orchestrator 才发一次任务请求。
+`COMPLETE|SUCCESS|GROUND_DONE` 后 orchestrator 才发一次任务请求。该状态发布者和
+两个消费者统一使用 `RELIABLE + TRANSIENT_LOCAL`，确保后启动的空中链也能收到已完成
+状态；若运行时端点显示 `VOLATILE`，不得进入自动任务。
 
 ### Foxglove 3D 只看无人机
 
@@ -179,7 +184,20 @@ HOLD，超过 1.20 s 或 PX4 failsafe 请求 Land。轨迹进度和试飞阶段�
 `LAND`/`ABORT` 会锁存终端降落状态；`CLEAR` 只清除普通操作意图，不解除该安全锁。
 确认 PX4 已落地并解除武装后，必须显式发送 `RESET` 才能开始下一轮。
 安全探针会在每轮开始自动执行这项 RESET 握手，并要求 executor=`DISABLED`、PX4
-`AUTO_LOITER`、未解锁及支架上静稳后才进入 preflight。
+`AUTO_LOITER`、未解锁及支架上静稳后才进入 preflight。每次落地偏离桌面后必须重载
+场景，直到 `/drone/navigation/state` 报告 `prearm_pose_valid=true`；不得通过扩大容差
+绕过。同时必须看到 `planner_map_ready=true`，且 planner state 内的 `map_age`、`tf_age`
+不超过 0.60 s；只有点云频率、没有成功 TF/voxel 更新不能作为地图就绪证据。只验证
+预检而不解锁时执行：
+
+```bash
+ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
+  -p preflight_only:=true \
+  -p output_path:=/tmp/prearm_support_acceptance.json
+```
+
+现场的拒绝/通过对照数据见
+`docs/project/prearm_pose_gate_evidence_2026-07-22.json`。
 
 ## 8. 验收证据
 

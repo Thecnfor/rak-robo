@@ -26,6 +26,36 @@ Vec3 operator/(const Vec3 & value, double scalar);
 double norm(const Vec3 & value);
 double distance(const Vec3 & lhs, const Vec3 & rhs);
 
+struct PrearmPoseSample
+{
+  Vec3 position;
+  Vec3 velocity;
+  double roll_radians{0.0};
+  double pitch_radians{0.0};
+};
+
+struct PrearmPoseLimits
+{
+  Vec3 expected_position;
+  double position_tolerance{0.02};
+  double max_speed{0.05};
+  double max_tilt_radians{0.05235987755982989};
+};
+
+bool prearmPoseAllowed(
+  const PrearmPoseSample & sample,
+  const PrearmPoseLimits & limits);
+
+bool freshPlannerMapReady(
+  bool state_received,
+  bool map_ready,
+  double state_age_seconds,
+  double timeout_seconds);
+
+std::optional<bool> boolTokenValue(
+  const std::string & text,
+  const std::string & key);
+
 struct Quaternion
 {
   double x{0.0};
@@ -68,6 +98,7 @@ bool operatorArmRequestAllowed(
   bool have_goal,
   bool side_door_closed,
   bool px4_inputs_ready,
+  bool prearm_pose_allowed,
   bool landed_known,
   bool landed,
   bool armed,

@@ -88,7 +88,7 @@ PX4 输出订阅使用 `BEST_EFFORT/VOLATILE`。Offboard 以 20 Hz 发送，先�
 | 输出 | `/drone/navigation/trajectory` | `drone_navigation_pkg/Trajectory` |
 | 输出 | `/drone/navigation/planned_path` | `nav_msgs/Path` |
 | 输出 | `/drone/navigation/state` | 任务状态机状态 |
-| 输出 | `/drone/navigation/{planner_state,executor_state,px4_status,px4_command_ack}` | 诊断 |
+| 输出 | `/drone/navigation/{planner_state,executor_state,px4_status,px4_command_ack}` | 诊断；`planner_state` 包含 `map_ready/map_age/tf_age` |
 | 输出 | `/drone/navigation/landed` | `std_msgs/Bool` |
 
 状态机为：
@@ -109,11 +109,15 @@ IDLE → PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH
 - 舱门命令：`left_close|left_open|bottom_close|bottom_open`
 - 舱门确认：`left_closed|left_opened|bottom_closed|bottom_opened payload_released`
 - 地面完成门控接受：`COMPLETE`、`SUCCESS`、`GROUND_DONE`
+- `/arena/ground/state`：`std_msgs/String`，发布者和消费者统一
+  `RELIABLE + TRANSIENT_LOCAL`，允许空中链晚加入后取得已完成状态
 - 总状态：`/arena/orchestrator/state`
 - 公共 action：`/drone/flight_command` (`DroneFlightCommand`) 和
   `/cargo_bay/door_command` (`CargoDoorCommand`)
 - 默认 `allow_manual_*_actions=false`：自主任务中拒绝 GOTO/RETURN/HOVER 和人工舱门命令；
   LAND/ABORT 始终经 supervisor 紧急 override 生效，避免 last-writer-wins。
+- 地面解锁门禁要求 planner 在 0.60 s 内至少成功完成一次点云 TF 和 voxel map 更新；
+  已解锁后不再用该地面门禁截断 Offboard 心跳。
 
 ## 运行时票据
 

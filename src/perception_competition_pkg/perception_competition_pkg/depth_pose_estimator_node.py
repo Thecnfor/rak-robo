@@ -105,7 +105,8 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

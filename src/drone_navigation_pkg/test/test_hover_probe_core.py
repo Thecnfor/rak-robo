@@ -21,6 +21,67 @@ class Endpoint:
 
 
 class HoverProbeCoreTest(unittest.TestCase):
+    def test_planner_map_gate_requires_true_token_and_fresh_state(self):
+        self.assertTrue(
+            CORE.planner_map_ready(
+                "WAITING_FOR_GOAL map_ready=true map_age=0.02 tf_age=0.02",
+                0.2,
+                0.6,
+            )
+        )
+        self.assertFalse(
+            CORE.planner_map_ready("WAITING map_ready=false", 0.2, 0.6)
+        )
+        self.assertFalse(CORE.planner_map_ready("", 0.2, 0.6))
+        self.assertFalse(
+            CORE.planner_map_ready("ACTIVE map_ready=true", 0.61, 0.6)
+        )
+
+    def test_prearm_pose_gate_requires_calibrated_spawn_speed_and_tilt(self):
+        limits = CORE.PrearmPoseLimits(
+            expected_position=(4.55, -0.38, 1.13),
+            position_tolerance_m=0.02,
+            max_speed_mps=0.05,
+            max_tilt_deg=3.0,
+        )
+        official_spawn = CORE.PrearmPoseSample(
+            position=(4.5513, -0.3819, 1.1299),
+            speed_mps=0.0144,
+            roll_deg=0.02,
+            pitch_deg=-0.04,
+        )
+        floor_pose = CORE.PrearmPoseSample(
+            position=(5.1876, -0.3052, 0.2630),
+            speed_mps=0.0,
+            roll_deg=0.0,
+            pitch_deg=0.0,
+        )
+
+        self.assertTrue(CORE.prearm_pose_allowed(official_spawn, limits))
+        self.assertFalse(CORE.prearm_pose_allowed(floor_pose, limits))
+        self.assertFalse(
+            CORE.prearm_pose_allowed(
+                CORE.PrearmPoseSample(
+                    position=official_spawn.position,
+                    speed_mps=0.051,
+                    roll_deg=0.0,
+                    pitch_deg=0.0,
+                ),
+                limits,
+            )
+        )
+        self.assertFalse(
+            CORE.prearm_pose_allowed(
+                CORE.PrearmPoseSample(
+                    position=official_spawn.position,
+                    speed_mps=0.0,
+                    roll_deg=3.01,
+                    pitch_deg=0.0,
+                ),
+                limits,
+            )
+        )
+
     def test_static_support_can_replace_missed_discrete_land_sample(self):
         self.assertTrue(CORE.ground_observation_usable(True, False))
         self.assertTrue(CORE.ground_observation_usable(False, True))

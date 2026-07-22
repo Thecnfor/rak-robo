@@ -24,6 +24,7 @@ from typing import Optional
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 try:
@@ -31,6 +32,13 @@ try:
 except ImportError:  # pragma: no cover
     DetectObject = None  # type: ignore
     PlanToPose = None  # type: ignore
+
+
+_ARENA_STATE_QOS = QoSProfile(
+    depth=10,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
 
 
 class _Phase(Enum):
@@ -54,7 +62,7 @@ class _PickPlace(Node):
         super().__init__('dual_arm_pick_place_node')
         self._state = _State()
         self._publisher = self.create_publisher(
-            String, '/arena/ground/state', 10)
+            String, '/arena/ground/state', _ARENA_STATE_QOS)
         self._state_publisher = self.create_publisher(
             String, '/dual_arm/phase', 10)
         self._goal_subscription = self.create_subscription(
@@ -116,7 +124,8 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

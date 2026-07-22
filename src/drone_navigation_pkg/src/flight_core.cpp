@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -259,6 +260,59 @@ double distance(const Vec3 & lhs, const Vec3 & rhs)
   return norm(lhs - rhs);
 }
 
+bool prearmPoseAllowed(
+  const PrearmPoseSample & sample,
+  const PrearmPoseLimits & limits)
+{
+  if (limits.position_tolerance < 0.0 || limits.max_speed < 0.0 ||
+    limits.max_tilt_radians < 0.0)
+  {
+    return false;
+  }
+  return distance(sample.position, limits.expected_position) <= limits.position_tolerance &&
+         norm(sample.velocity) <= limits.max_speed &&
+         std::abs(sample.roll_radians) <= limits.max_tilt_radians &&
+         std::abs(sample.pitch_radians) <= limits.max_tilt_radians;
+}
+
+bool freshPlannerMapReady(
+  bool state_received,
+  bool map_ready,
+  double state_age_seconds,
+  double timeout_seconds)
+{
+  return timeout_seconds >= 0.0 && state_age_seconds >= 0.0 &&
+         state_received && map_ready && state_age_seconds <= timeout_seconds;
+}
+
+std::optional<bool> boolTokenValue(
+  const std::string & text,
+  const std::string & key)
+{
+  const std::string prefix = key + "=";
+  std::optional<bool> result;
+  std::istringstream stream(text);
+  std::string token;
+  while (stream >> token) {
+    if (token.rfind(prefix, 0) != 0) {
+      continue;
+    }
+    std::optional<bool> value;
+    if (token == prefix + "true") {
+      value = true;
+    } else if (token == prefix + "false") {
+      value = false;
+    } else {
+      return std::nullopt;
+    }
+    if (result.has_value() && result != value) {
+      return std::nullopt;
+    }
+    result = value;
+  }
+  return result;
+}
+
 RosOdometrySample px4NedFrdToRosEnuFlu(const Px4OdometrySample & sample)
 {
   RosOdometrySample converted;
@@ -373,6 +427,7 @@ bool operatorArmRequestAllowed(
   bool have_goal,
   bool side_door_closed,
   bool px4_inputs_ready,
+  bool prearm_pose_allowed,
   bool landed_known,
   bool landed,
   bool armed,
@@ -381,7 +436,7 @@ bool operatorArmRequestAllowed(
   if (!have_goal || !side_door_closed || !px4_inputs_ready || !landed_known) {
     return false;
   }
-  const bool safe_ground_arm = landed && !armed;
+  const bool safe_ground_arm = landed && !armed && prearm_pose_allowed;
   // Land detection can remain true for several cycles after successful arming.
   // Once PX4 reports armed+offboard, never interrupt the stream because of that lag.
   const bool active_offboard_tracking = armed && offboard;
@@ -844,6 +899,11 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
       }
       break;
     case FlightPhase::ARMING:
+      if (!inputs.armed && !inputs.px4_ready) {
+        phase_ = FlightPhase::PREFLIGHT;
+        decision.reason = "prearm readiness lost during Offboard prestream";
+        break;
+      }
       decision.request_arm_offboard = true;
       if (inputs.armed && inputs.offboard) {
         phase_ = FlightPhase::TAKEOFF;

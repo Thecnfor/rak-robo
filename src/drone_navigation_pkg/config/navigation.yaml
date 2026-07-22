@@ -16,12 +16,18 @@
     # gaps under RTX load. Keep HOLD above that jitter while LAND remains 1.2 s.
     odometry_hold_timeout: 0.60
     data_land_timeout: 1.2
+    planner_map_timeout: 0.60
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.
     minimum_replan_execution_seconds: 4.0
     ground_disarm_delay_seconds: 2.0
     px4_map_origin: [4.55, -0.38, 1.13]
+    # Isaac world pose envelope required before any ground arm request.
+    prearm_spawn_position: [4.55, -0.38, 1.13]
+    prearm_position_tolerance: 0.02
+    prearm_max_speed: 0.05
+    prearm_max_tilt_deg: 3.0
     mission_autostart: false
     drop_search_pose: [0.0, 0.0, 1.8]
     drop_min_height: 1.6

@@ -25,6 +25,11 @@
 namespace drone_navigation
 {
 
+namespace
+{
+constexpr double kPi = 3.14159265358979323846;
+}
+
 class FlightSupervisorNode : public rclcpp::Node
 {
 public:
@@ -36,6 +41,10 @@ public:
     takeoff_height_ = declare_parameter<double>("takeoff_height", 1.8);
     hold_timeout_ = declare_parameter<double>("odometry_hold_timeout", 0.3);
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
+    planner_map_timeout_ = declare_parameter<double>("planner_map_timeout", 0.6);
+    if (planner_map_timeout_ <= 0.0) {
+      throw std::runtime_error("planner_map_timeout must be positive");
+    }
     pose_tolerance_ = declare_parameter<double>("pose_tolerance", 0.20);
     visual_offset_threshold_ = declare_parameter<double>("visual_offset_threshold", 0.04);
     visual_alignment_seconds_ = declare_parameter<double>("visual_alignment_seconds", 0.8);
@@ -43,6 +52,23 @@ public:
     visual_max_velocity_ = declare_parameter<double>("visual_max_velocity", 0.20);
     drop_min_height_ = declare_parameter<double>("drop_min_height", 1.6);
     drop_max_height_ = declare_parameter<double>("drop_max_height", 2.0);
+    const auto prearm_spawn = declare_parameter<std::vector<double>>(
+      "prearm_spawn_position", {4.55, -0.38, 1.13});
+    if (prearm_spawn.size() != 3) {
+      throw std::runtime_error("prearm_spawn_position must contain [x, y, z]");
+    }
+    prearm_limits_.expected_position = {
+      prearm_spawn[0], prearm_spawn[1], prearm_spawn[2]};
+    prearm_limits_.position_tolerance = declare_parameter<double>(
+      "prearm_position_tolerance", 0.02);
+    prearm_limits_.max_speed = declare_parameter<double>("prearm_max_speed", 0.05);
+    prearm_limits_.max_tilt_radians = declare_parameter<double>(
+      "prearm_max_tilt_deg", 3.0) * kPi / 180.0;
+    if (prearm_limits_.position_tolerance < 0.0 || prearm_limits_.max_speed < 0.0 ||
+      prearm_limits_.max_tilt_radians < 0.0)
+    {
+      throw std::runtime_error("prearm pose limits must be non-negative");
+    }
     if (drop_min_height_ < 0.0 || drop_min_height_ > drop_max_height_) {
       throw std::runtime_error("drop height window must be non-negative and ordered");
     }
@@ -85,6 +111,9 @@ public:
     px4_subscription_ = create_subscription<std_msgs::msg::String>(
       "/drone/navigation/px4_status", rclcpp::QoS(10).transient_local(),
       std::bind(&FlightSupervisorNode::onPx4Status, this, std::placeholders::_1));
+    planner_state_subscription_ = create_subscription<std_msgs::msg::String>(
+      "/drone/navigation/planner_state", rclcpp::QoS(10).transient_local(),
+      std::bind(&FlightSupervisorNode::onPlannerState, this, std::placeholders::_1));
     landed_subscription_ = create_subscription<std_msgs::msg::Bool>(
       "/drone/navigation/landed", rclcpp::QoS(10).transient_local(),
       [this](const std_msgs::msg::Bool::SharedPtr message) {
@@ -94,6 +123,12 @@ public:
     odometry_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
       "/drone/navigation/odometry", rclcpp::QoS(20),
       std::bind(&FlightSupervisorNode::onOdometry, this, std::placeholders::_1));
+    raw_pose_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/drone0/state/pose", rclcpp::SensorDataQoS(),
+      std::bind(&FlightSupervisorNode::onRawPose, this, std::placeholders::_1));
+    raw_twist_subscription_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+      "/drone0/state/twist", rclcpp::SensorDataQoS(),
+      std::bind(&FlightSupervisorNode::onRawTwist, this, std::placeholders::_1));
     pointcloud_subscription_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/avoidance/lidar/pointcloud", rclcpp::SensorDataQoS(),
       [this](const sensor_msgs::msg::PointCloud2::SharedPtr) {
@@ -159,6 +194,13 @@ private:
     have_px4_status_ = true;
   }
 
+  void onPlannerState(const std_msgs::msg::String::SharedPtr message)
+  {
+    planner_map_ready_ = boolTokenValue(message->data, "map_ready").value_or(false);
+    have_planner_state_ = true;
+    last_planner_state_time_ = steadyNow();
+  }
+
   void onOdometry(const nav_msgs::msg::Odometry::SharedPtr message)
   {
     current_position_ = {
@@ -174,6 +216,48 @@ private:
       home_ = current_position_;
       have_home_ = true;
     }
+  }
+
+  void onRawPose(const geometry_msgs::msg::PoseStamped::SharedPtr message)
+  {
+    if (message->header.frame_id != map_frame_) {
+      have_raw_pose_ = false;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Rejected prearm raw pose in frame '%s'; expected '%s'",
+        message->header.frame_id.c_str(), map_frame_.c_str());
+      return;
+    }
+    prearm_sample_.position = {
+      message->pose.position.x, message->pose.position.y, message->pose.position.z};
+    const auto & orientation = message->pose.orientation;
+    const double orientation_norm_squared =
+      orientation.x * orientation.x + orientation.y * orientation.y +
+      orientation.z * orientation.z + orientation.w * orientation.w;
+    if (!std::isfinite(orientation_norm_squared) ||
+      std::abs(orientation_norm_squared - 1.0) > 0.01)
+    {
+      have_raw_pose_ = false;
+      return;
+    }
+    const double sin_roll = 2.0 *
+      (orientation.w * orientation.x + orientation.y * orientation.z);
+    const double cos_roll = 1.0 - 2.0 *
+      (orientation.x * orientation.x + orientation.y * orientation.y);
+    prearm_sample_.roll_radians = std::atan2(sin_roll, cos_roll);
+    const double sin_pitch = std::clamp(
+      2.0 * (orientation.w * orientation.y - orientation.z * orientation.x), -1.0, 1.0);
+    prearm_sample_.pitch_radians = std::asin(sin_pitch);
+    have_raw_pose_ = true;
+    last_raw_pose_time_ = steadyNow();
+  }
+
+  void onRawTwist(const geometry_msgs::msg::TwistStamped::SharedPtr message)
+  {
+    prearm_sample_.velocity = {
+      message->twist.linear.x, message->twist.linear.y, message->twist.linear.z};
+    have_raw_twist_ = true;
+    last_raw_twist_time_ = steadyNow();
   }
 
   void onTargetOffset(const std_msgs::msg::Float32MultiArray::SharedPtr message)
@@ -236,8 +320,19 @@ private:
     // discrete state to continuously arriving vehicle odometry instead.
     const bool px4_state_usable = px4DiscreteStateUsable(
       have_px4_status_, ageOrInfinity(last_odometry_time_), hold_timeout_);
-    inputs.px4_ready =
+    const bool prearm_pose_valid = have_raw_pose_ && have_raw_twist_ &&
+      ageOrInfinity(last_raw_pose_time_) <= hold_timeout_ &&
+      ageOrInfinity(last_raw_twist_time_) <= hold_timeout_ &&
+      prearmPoseAllowed(prearm_sample_, prearm_limits_);
+    const bool planner_map_ready = freshPlannerMapReady(
+      have_planner_state_, planner_map_ready_,
+      ageOrInfinity(last_planner_state_time_), planner_map_timeout_);
+    const bool base_px4_ready =
       px4_ready_ && !px4_failsafe_ && px4_state_usable && navigation_inputs_ready;
+    // The calibrated support envelope is a ground-arm gate only. Once armed,
+    // leaving the support must not interrupt the active Offboard stream.
+    inputs.px4_ready = base_px4_ready &&
+      (armed_ || (prearm_pose_valid && planner_map_ready));
     inputs.armed = armed_;
     inputs.offboard = offboard_;
     inputs.px4_failsafe = px4_failsafe_;
@@ -268,7 +363,7 @@ private:
     const bool operator_arm_allowed = operator_override &&
       *operator_mode_ == "ARM_OFFBOARD" && operatorArmRequestAllowed(
       have_operator_goal_, side_door_closed_, inputs.px4_ready,
-      have_landed_status_, landed_, armed_, offboard_);
+      prearm_pose_valid, have_landed_status_, landed_, armed_, offboard_);
     if (!operator_override && decision.command_close_side_door) {
       publishString(cargo_command_publisher_, "left_close");
     }
@@ -316,6 +411,10 @@ private:
     if (operator_override) {
       state.data += " operator_override=" + *operator_mode_;
     }
+    state.data += std::string(" prearm_pose_valid=") +
+      (prearm_pose_valid ? "true" : "false");
+    state.data += std::string(" planner_map_ready=") +
+      (planner_map_ready ? "true" : "false");
     state_publisher_->publish(state);
   }
 
@@ -484,6 +583,7 @@ private:
   bool mission_autostart_{false};
   double takeoff_height_{1.8};
   double hold_timeout_{0.3};
+  double planner_map_timeout_{0.6};
   double land_timeout_{1.0};
   double pose_tolerance_{0.2};
   double visual_offset_threshold_{0.04};
@@ -497,6 +597,8 @@ private:
   Vec3 home_;
   Vec3 current_position_;
   Vec3 current_velocity_;
+  PrearmPoseSample prearm_sample_;
+  PrearmPoseLimits prearm_limits_;
   Vec3 operator_goal_;
   std::optional<std::string> operator_mode_;
   bool mission_requested_{false};
@@ -504,12 +606,16 @@ private:
   bool side_door_closed_{false};
   bool px4_ready_{false};
   bool have_px4_status_{false};
+  bool planner_map_ready_{false};
+  bool have_planner_state_{false};
   bool px4_failsafe_{false};
   bool armed_{false};
   bool offboard_{false};
   bool landed_{false};
   bool have_landed_status_{false};
   bool have_home_{false};
+  bool have_raw_pose_{false};
+  bool have_raw_twist_{false};
   bool target_visible_{false};
   bool payload_released_{false};
   bool have_operator_goal_{false};
@@ -517,6 +623,9 @@ private:
   double target_nx_{0.0};
   double target_ny_{0.0};
   SteadyTime last_odometry_time_{};
+  SteadyTime last_planner_state_time_{};
+  SteadyTime last_raw_pose_time_{};
+  SteadyTime last_raw_twist_time_{};
   SteadyTime last_pointcloud_time_{};
   SteadyTime last_target_time_{};
   std::optional<rclcpp::Time> aligned_since_;
@@ -532,8 +641,11 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ground_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cargo_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr px4_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planner_state_subscription_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr landed_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscription_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr raw_pose_subscription_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr raw_twist_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_subscription_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr target_subscription_;
   rclcpp::TimerBase::SharedPtr timer_;

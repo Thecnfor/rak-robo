@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +47,10 @@ public:
     config.max_velocity = declare_parameter<double>("max_velocity", 0.5);
     config.max_acceleration = declare_parameter<double>("max_acceleration", 1.0);
     obstacle_memory_seconds_ = declare_parameter<double>("obstacle_memory_seconds", 1.0);
+    map_readiness_timeout_ = declare_parameter<double>("planner_map_timeout", 0.6);
+    if (map_readiness_timeout_ <= 0.0) {
+      throw std::runtime_error("planner_map_timeout must be positive");
+    }
     config_ = config;
     planner_ = std::make_unique<VoxelPlanner>(config_);
     rolling_map_ = std::make_unique<RollingVoxelMap>(
@@ -74,8 +79,20 @@ public:
 private:
   void publishState(const std::string & text)
   {
+    const auto current_time = now();
+    const double map_age = have_pointcloud_ ?
+      (current_time - last_pointcloud_time_).seconds() :
+      std::numeric_limits<double>::infinity();
+    const double transform_age = have_transform_update_ ?
+      (current_time - last_transform_success_time_).seconds() :
+      std::numeric_limits<double>::infinity();
+    const bool map_ready = have_pointcloud_ && have_transform_update_ &&
+      map_age >= 0.0 && map_age <= map_readiness_timeout_ &&
+      transform_age >= 0.0 && transform_age <= map_readiness_timeout_;
     std_msgs::msg::String state;
-    state.data = text;
+    state.data = text + " map_ready=" + (map_ready ? "true" : "false") +
+      " map_age=" + std::to_string(map_age) +
+      " tf_age=" + std::to_string(transform_age);
     state_publisher_->publish(state);
   }
 
@@ -144,13 +161,16 @@ private:
       RCLCPP_WARN(get_logger(), "Invalid PointCloud2 fields: %s", exception.what());
       return;
     }
-    last_pointcloud_time_ = now();
-    rolling_map_->update(obstacles, last_pointcloud_time_.seconds());
+    const auto update_time = now();
+    last_pointcloud_time_ = update_time;
+    last_transform_success_time_ = update_time;
+    rolling_map_->update(obstacles, update_time.seconds());
     planner_->setObstacles(
       rolling_map_->obstaclesAround(
         current_position_, config_.horizontal_range, config_.vertical_range,
         last_pointcloud_time_.seconds()));
     have_pointcloud_ = true;
+    have_transform_update_ = true;
     cloud_revision_++;
   }
 
@@ -264,6 +284,7 @@ private:
   std::string map_frame_;
   PlannerConfig config_;
   double obstacle_memory_seconds_{1.0};
+  double map_readiness_timeout_{0.6};
   std::unique_ptr<VoxelPlanner> planner_;
   std::unique_ptr<RollingVoxelMap> rolling_map_;
   tf2_ros::Buffer tf_buffer_;
@@ -272,6 +293,7 @@ private:
   Vec3 goal_;
   bool have_odometry_{false};
   bool have_pointcloud_{false};
+  bool have_transform_update_{false};
   bool have_goal_{false};
   std::uint64_t cloud_revision_{0};
   std::uint64_t goal_revision_{0};
@@ -282,6 +304,7 @@ private:
   std::uint32_t trajectory_id_{0};
   rclcpp::Time last_odometry_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_pointcloud_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_transform_success_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Publisher<navigation_message::Trajectory>::SharedPtr trajectory_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;

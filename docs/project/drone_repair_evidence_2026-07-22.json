@@ -1,0 +1,43 @@
+{
+  "date": "2026-07-22",
+  "scope": "ground-state QoS and prearm planner-map readiness repair",
+  "flight_performed": false,
+  "red_evidence": {
+    "ground_state_qos": "publisher VOLATILE, flight_supervisor and air_ground_orchestrator TRANSIENT_LOCAL",
+    "planner_gate": "preflight used pointcloud frequency without proof of successful TF and voxel-map ingestion"
+  },
+  "green_evidence": {
+    "ground_state_qos": "publisher and both subscribers RELIABLE + TRANSIENT_LOCAL; no incompatible-QoS warning",
+    "planner_state": "WAITING_FOR_INPUTS map_ready=true map_age=0.000000 tf_age=0.000000",
+    "supervisor_state": "IDLE prearm_pose_valid=true planner_map_ready=true",
+    "preflight_report": "/tmp/drone_repair_preflight_20260722.json",
+    "preflight_success": true,
+    "post_review_preflight_report": "/tmp/drone_repair_postreview_preflight_20260722.json",
+    "post_review_preflight_success": true,
+    "post_review_px4_status": "ready=true armed=false offboard=false failsafe=false nav_state=4",
+    "planner_state_age_seconds": 0.045,
+    "planner_state_rate_hz": 4.99,
+    "interface_report": "/tmp/drone_repair_interface_20260722.json",
+    "interface_audit_ok": true,
+    "fmu_input_writer": "trajectory_executor only",
+    "shutdown": "14 bringup processes exited cleanly after SIGINT; no rcl_shutdown already called traceback",
+    "review_fixes": "ARMING continuously rechecks readiness; map_ready uses exact fail-closed token parsing; planner_map_timeout has one configured source"
+  },
+  "tests": {
+    "packages": [
+      "drone_navigation_pkg",
+      "dual_arm_pkg",
+      "perception_competition_pkg",
+      "competition_orchestrator_pkg",
+      "bridge_competition_pkg"
+    ],
+    "total": 75,
+    "failures": 0
+  },
+  "remaining_blockers": {
+    "ticket_10": "fixed-setpoint step ladder to isolate PX4/model horizontal tracking oscillation",
+    "ticket_11": "continuous EGO trajectory handoff and material-benefit gate",
+    "ticket_12": "verified table landing polygon, return-before-land, and emergency landing policy"
+  },
+  "decision": "Do not start another autonomous flight until tickets 10 and 12 have a bounded diagnostic and recovery path."
+}

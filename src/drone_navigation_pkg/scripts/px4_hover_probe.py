@@ -37,12 +37,16 @@ from std_msgs.msg import String
 
 from hover_probe_core import (
     CONTINUOUS_FLIGHT_TOPICS,
+    PrearmPoseLimits,
+    PrearmPoseSample,
     RateWindow,
     StabilityWindow,
     ground_observation_usable,
     normalized_node_names,
     parse_bool_token,
     phase_elapsed_seconds,
+    planner_map_ready,
+    prearm_pose_allowed,
     quaternion_roll_pitch_degrees,
     sole_writer_is,
     startup_reset_ready,
@@ -70,7 +74,29 @@ class HoverProbe(Node):
         self.flight_data_timeout = float(
             self.declare_parameter("flight_data_timeout", 1.5).value
         )
+        self.planner_map_timeout = float(
+            self.declare_parameter("planner_map_timeout", 0.6).value
+        )
         self.preflight_only = bool(self.declare_parameter("preflight_only", True).value)
+        spawn = list(
+            self.declare_parameter(
+                "prearm_spawn_position", [4.55, -0.38, 1.13]
+            ).value
+        )
+        if len(spawn) != 3:
+            raise ValueError("prearm_spawn_position must contain [x, y, z]")
+        self.prearm_limits = PrearmPoseLimits(
+            expected_position=tuple(float(value) for value in spawn),
+            position_tolerance_m=float(
+                self.declare_parameter("prearm_position_tolerance", 0.02).value
+            ),
+            max_speed_mps=float(
+                self.declare_parameter("prearm_max_speed", 0.05).value
+            ),
+            max_tilt_deg=float(
+                self.declare_parameter("prearm_max_tilt_deg", 3.0).value
+            ),
+        )
         self.output_path = Path(
             str(self.declare_parameter("output_path", "/tmp/drone_hover_probe.json").value)
         )
@@ -79,6 +105,10 @@ class HoverProbe(Node):
             or self.hover_seconds <= 0.0
             or self.land_wall_timeout <= 0.0
             or self.flight_data_timeout <= 0.0
+            or self.planner_map_timeout <= 0.0
+            or self.prearm_limits.position_tolerance_m < 0.0
+            or self.prearm_limits.max_speed_mps < 0.0
+            or self.prearm_limits.max_tilt_deg < 0.0
         ):
             raise ValueError("probe durations and timeouts must be positive")
 
@@ -156,6 +186,7 @@ class HoverProbe(Node):
                 "px4_status",
                 "land_status",
                 "nav_odometry",
+                "planner_state",
             )
         }
         self.stability = StabilityWindow(4.0)
@@ -259,6 +290,7 @@ class HoverProbe(Node):
 
     def _on_planner_state(self, message):
         self.planner_state = message.data
+        self._mark("planner_state")
 
     def _on_cargo_status(self, message):
         text = message.data.lower()
@@ -342,6 +374,22 @@ class HoverProbe(Node):
         writers = self._writer_state()
         status = self.vehicle_status
         stability = self.stability.report()
+        prearm_sample = None
+        calibrated_spawn_pose = False
+        spawn_position_error = float("inf")
+        if self.raw_position is not None:
+            prearm_sample = PrearmPoseSample(
+                position=tuple(self.raw_position),
+                speed_mps=self.raw_speed,
+                roll_deg=self.raw_roll,
+                pitch_deg=self.raw_pitch,
+            )
+            calibrated_spawn_pose = prearm_pose_allowed(
+                prearm_sample, self.prearm_limits
+            )
+            spawn_position_error = math.dist(
+                prearm_sample.position, self.prearm_limits.expected_position
+            )
         # VehicleLandDetected is a discrete transition topic. A late-joining
         # probe may not receive the already-landed sample, so the measured
         # supported-airframe stability is an equivalent pre-arm observation.
@@ -360,6 +408,11 @@ class HoverProbe(Node):
                 self.land_status is not None, stability.passes()
             ),
             "navigation_odometry": self.nav_position is not None and ages["nav_odometry"] <= 0.45,
+            "planner_map_ready": planner_map_ready(
+                self.planner_state,
+                ages["planner_state"],
+                self.planner_map_timeout,
+            ),
             "px4_ready": bool(status and status.pre_flight_checks_pass and not status.failsafe),
             "disarmed": not self._armed(),
             "landed_or_supported": grounded,
@@ -367,6 +420,7 @@ class HoverProbe(Node):
             "bottom_door_closed": self.bottom_door_closed,
             "payload_locked": self.payload_locked is True,
             "prearm_support": self.prearm_support is True,
+            "calibrated_spawn_pose": calibrated_spawn_pose,
             "stable_airframe": stability.passes(),
             "sole_px4_writer": all(
                 sole_writer_is(
@@ -384,6 +438,16 @@ class HoverProbe(Node):
                 "max_drift_m": round(stability.max_drift_m, 6),
                 "max_speed_mps": round(stability.max_speed_mps, 6),
                 "max_tilt_deg": round(stability.max_tilt_deg, 4),
+            },
+            "prearm_pose": {
+                "expected_position": self.prearm_limits.expected_position,
+                "position_error_m": round(spawn_position_error, 6),
+                "position_tolerance_m": self.prearm_limits.position_tolerance_m,
+                "speed_mps": round(self.raw_speed, 6),
+                "max_speed_mps": self.prearm_limits.max_speed_mps,
+                "roll_deg": round(self.raw_roll, 4),
+                "pitch_deg": round(self.raw_pitch, 4),
+                "max_tilt_deg": self.prearm_limits.max_tilt_deg,
             },
             "writers": writers,
             "executor_state": self.executor_state,
