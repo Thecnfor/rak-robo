@@ -21,6 +21,9 @@
     fixed_setpoint_topic: /drone/navigation/fixed_setpoint
     actuator_motors_topic: /fmu/out/actuator_motors
     actuator_acceptance_timeout: 0.30
+    # PX4 v1.16 default DDS does not publish actuator_motors. Keep false and
+    # close saturation acceptance from the ULog after each flight.
+    require_live_actuator_feedback: false
     px4_command_ack_topic: /drone/navigation/px4_command_ack
     # Diagnostic-only direct position intent. Competition bringup keeps this off.
     allow_fixed_setpoint_diagnostic: false

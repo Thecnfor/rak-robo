@@ -221,8 +221,11 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
 里程计仍为 1.5 s；固定阶梯若水平偏移 >0.20 m、低于 home >0.10 m、速度 >0.5 m/s
 或倾角 >20°，会先尝试返回落区再 LAND。验收 HOLD 期间任一采样若 XY 误差 >0.10 m、
 高度误差 >0.05 m、速度 >0.05 m/s 或归一化电机输出达到 0.95，整轮判失败；解除锁定
-且 HOLD 中电机反馈超过 0.30 s 未更新同样失败。解除锁定后仍用最终实测触地点复核
-落区。中断或降落确认延迟时，进程持续发布安全
+若现场另行开放只读 `/fmu/out/actuator_motors` 并设置
+`require_live_actuator_feedback=true`，HOLD 中反馈超过 0.30 s 未更新同样失败。当前 PX4
+v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和度；未完成 ULog 分析时
+探针不会把飞行标记为验收成功。解除锁定后仍用最终实测触地点复核落区。中断或降落
+确认延迟时，进程持续发布安全
 意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。2026-07-22 的四轮证据见
 `docs/project/drone_fixed_setpoint_evidence_2026-07-22.json`；当前不得继续放飞，须先
 把窄支架改成无 joint 的横向限位起飞托架并重做 +0.10 m 票据。

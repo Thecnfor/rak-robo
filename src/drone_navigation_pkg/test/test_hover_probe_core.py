@@ -150,7 +150,7 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.startup_reset_ready("DISABLED", True, False, False))
 
     def test_runtime_liveness_uses_continuous_topics_not_discrete_px4_state(self):
-        self.assertIn("actuator_motors", CORE.CONTINUOUS_FLIGHT_TOPICS)
+        self.assertNotIn("actuator_motors", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertIn("px4_sensor", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertIn("px4_odometry", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertNotIn("px4_status", CORE.CONTINUOUS_FLIGHT_TOPICS)
@@ -158,7 +158,6 @@ class HoverProbeCoreTest(unittest.TestCase):
 
     def test_clock_uses_independent_stale_timeout(self):
         ages = {
-            "actuator_motors": 0.1,
             "clock": 2.0,
             "raw_pose": 0.1,
             "raw_twist": 0.1,

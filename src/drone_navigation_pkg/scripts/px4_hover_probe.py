@@ -126,6 +126,9 @@ class HoverProbe(Node):
         self.actuator_acceptance_timeout = float(
             self.declare_parameter("actuator_acceptance_timeout", 0.30).value
         )
+        self.require_live_actuator_feedback = bool(
+            self.declare_parameter("require_live_actuator_feedback", False).value
+        )
         actuator_motors_topic = str(
             self.declare_parameter(
                 "actuator_motors_topic", "/fmu/out/actuator_motors"
@@ -565,10 +568,13 @@ class HoverProbe(Node):
             "landing_region_verified": verified_landing_region_available(
                 self.landing_region, self.landing_region_verified
             ),
-            "actuator_feedback_available": self.have_actuator_motors,
-            "actuator_feedback_fresh": (
-                rates["actuator_motors"] >= 4.0
-                and ages["actuator_motors"] <= 0.4
+            "actuator_feedback_ready": (
+                not self.require_live_actuator_feedback
+                or (
+                    self.have_actuator_motors
+                    and rates["actuator_motors"] >= 4.0
+                    and ages["actuator_motors"] <= 0.4
+                )
             ),
             "px4_ready": bool(status and status.pre_flight_checks_pass and not status.failsafe),
             "disarmed": not self._armed(),
@@ -741,6 +747,15 @@ class HoverProbe(Node):
     def _finish(self, success):
         if self.finished:
             return
+        if (
+            success
+            and not self.preflight_only
+            and not self.require_live_actuator_feedback
+        ):
+            success = False
+            self.failure_reason = (
+                "flight completed; PX4 ULog actuator saturation analysis required"
+            )
         self.success = success
         self.finished = True
         self.phase = "DONE"
@@ -763,6 +778,10 @@ class HoverProbe(Node):
             },
             "touchdown_position": self.touchdown_position,
             "command_acks": self.command_acks,
+            "live_actuator_feedback_required": self.require_live_actuator_feedback,
+            "postflight_ulog_actuator_analysis_required": (
+                not self.require_live_actuator_feedback
+            ),
             "preflight_gates": self.last_gates,
             "rounds": self.round_results,
             "events": self.events,
@@ -924,7 +943,8 @@ class HoverProbe(Node):
                 altitude_error,
                 self.raw_speed,
                 self.hold_saturation_seen,
-                self.trackers["actuator_motors"].age(now)
+                not self.require_live_actuator_feedback
+                or self.trackers["actuator_motors"].age(now)
                 <= self.actuator_acceptance_timeout,
             ):
                 self._abort(
@@ -998,7 +1018,8 @@ class HoverProbe(Node):
                 altitude_error,
                 self.raw_speed,
                 self.hold_saturation_seen,
-                self.trackers["actuator_motors"].age(now)
+                not self.require_live_actuator_feedback
+                or self.trackers["actuator_motors"].age(now)
                 <= self.actuator_acceptance_timeout,
             ):
                 self._abort("hover acceptance violated")

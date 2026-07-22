@@ -10,7 +10,6 @@ from math import asin, atan2, copysign, degrees, isfinite, sqrt
 
 
 CONTINUOUS_FLIGHT_TOPICS = (
-    "actuator_motors",
     "clock",
     "raw_pose",
     "raw_twist",
