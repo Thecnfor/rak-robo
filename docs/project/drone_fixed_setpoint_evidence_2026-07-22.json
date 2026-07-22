@@ -1,0 +1,74 @@
+{
+  "date": "2026-07-22",
+  "scope": "EGO-independent fixed-setpoint isolation of the PX4/Pegasus flight dynamics",
+  "result": "blocked_before_repeat_flight",
+  "invariants": {
+    "sole_fmu_input_writer": "/trajectory_executor",
+    "fixed_setpoint_diagnostic_default": false,
+    "all_rounds_ended_disarmed": true,
+    "px4_failsafe_seen": false
+  },
+  "confirmed": [
+    "fixed map-frame setpoints reached PX4 trajectory_setpoint",
+    "PX4 entered armed Offboard and emitted non-zero four-motor output",
+    "Isaac raw pose and PX4 odometry were recorded together",
+    "PX4 Iris control-allocation geometry did not match the assembled USD rotor centers",
+    "automatic fixed-step envelope and terminal LAND latch operated"
+  ],
+  "measured_model": {
+    "total_nominal_mass_kg": 1.21,
+    "usd_rotor_offsets_flu_m": [[0.065, -0.065], [-0.065, 0.065], [0.065, 0.065], [-0.065, -0.065]],
+    "px4_rotor_offsets_frd_m": [[0.065, 0.065], [-0.065, -0.065], [0.065, -0.065], [-0.065, 0.065]],
+    "px4_km": [0.117, 0.117, -0.117, -0.117],
+    "prearm_support_x_contact_m": 0.05,
+    "mpc_takeoff_ramp_s": 3.0
+  },
+  "rounds": [
+    {
+      "name": "round1_clock_isolation",
+      "result": "safe_abort",
+      "reason": "clock-only wall-time gap used the 1.5 s telemetry threshold",
+      "physical_lift": false,
+      "actuator_motor_max": [0.3791, 0.4619, 0.3201, 0.3533],
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-22/11_31_30.ulg",
+      "ulog_sha256": "64047aa10bcc485635476e16b5f95ffc0ac0379ba9656828118e0af7f759c681"
+    },
+    {
+      "name": "round2_original_iris_geometry",
+      "result": "manual_safe_abort_and_disarm",
+      "maximum_observed_horizontal_displacement_m": 0.43,
+      "maximum_body_rate_rad_s": 6.018,
+      "bag": "bags/drone_fixed_setpoint_20260722_round2",
+      "bag_sha256": "a0d03cf81cc2c05913a02dba01206ec3828d77275f96f5823ccbff52641ed4aa",
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-22/13_44_43.ulg",
+      "ulog_sha256": "7848a9df7ba7c784146cf891557ba787eb318cc2dbf37e3bef8fe1ec5f91a934"
+    },
+    {
+      "name": "round3_measured_control_allocation",
+      "result": "automatic_envelope_abort_return_land_disarm",
+      "abort_reason": "horizontal=0.180m drop=0.101m speed=0.447m/s tilt=8.4deg",
+      "maximum_body_rate_rad_s": 6.569,
+      "touchdown": "prearm support",
+      "bag": "bags/drone_fixed_setpoint_20260722_round3",
+      "bag_sha256": "e7d999e9d0ae4bf2ef9efe87494cd392db3af986c3086c5af641e4a1e8ec1a64",
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-22/13_56_23.ulg",
+      "ulog_sha256": "729c3e26e968f082dc9a777aa2cb1c350651355648e5087b3a969d71d3590e07"
+    },
+    {
+      "name": "round4_rotor_joint_animation_disabled",
+      "result": "automatic_envelope_abort_then_floor_disarm",
+      "abort_reason": "horizontal=0.153m drop=0.104m speed=0.368m/s tilt=8.6deg",
+      "conclusion": "removing duplicate physical rotor animation was correct but insufficient",
+      "final_raw_position_m": [3.29978, -3.13175, 0.018],
+      "bag": "bags/drone_fixed_setpoint_20260722_round4",
+      "bag_sha256": "c549e2556d2c86ae56d8a230618683517024ad89cf2b66e80a73a2b4331140df",
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-22/14_11_36.ulg",
+      "ulog_sha256": "7547e814c4a2d0355f435a08433cffee8c455ad1cd2f6540c5a2c3bded164c7b"
+    }
+  ],
+  "next_gate": {
+    "change": "replace the narrow two-pad support with a static non-jointed launch cradle that constrains lateral slip until vertical clearance",
+    "do_not_change_yet": ["PX4 rate gains", "MPC_TKO_RAMP_T", "EGO planner"],
+    "acceptance": "+0.10 m fixed step without envelope abort, return inside landing region, LAND and disarm"
+  }
+}

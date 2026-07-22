@@ -92,6 +92,32 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertTrue(CORE.takeoff_goal_reached(0.01, 1.21, 1.00, 1.25))
         self.assertFalse(CORE.takeoff_goal_reached(0.16, 1.25, 1.00, 1.25))
 
+    def test_fixed_step_requires_position_and_speed_settling(self):
+        self.assertTrue(CORE.fixed_step_reached(0.04, 0.03, 0.04))
+        self.assertFalse(CORE.fixed_step_reached(0.11, 0.03, 0.04))
+        self.assertFalse(CORE.fixed_step_reached(0.04, 0.06, 0.04))
+        self.assertFalse(CORE.fixed_step_reached(0.04, 0.03, 0.051))
+
+    def test_fixed_step_envelope_rejects_drift_drop_speed_and_tilt(self):
+        self.assertTrue(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.20, 8.0))
+        self.assertFalse(CORE.fixed_step_envelope_safe(0.201, 0.02, 0.20, 8.0))
+        self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.101, 0.20, 8.0))
+        self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.51, 8.0))
+        self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.20, 20.1))
+
+    def test_landing_region_is_valid_and_contains_only_safe_touchdown_area(self):
+        region = CORE.LandingRegion(
+            center_xy=(4.55, -0.38),
+            half_extents_xy=(0.18, 0.18),
+        )
+        self.assertTrue(region.valid())
+        self.assertTrue(region.contains((4.55, -0.38)))
+        self.assertTrue(region.contains((4.73, -0.20)))
+        self.assertFalse(region.contains((4.731, -0.20)))
+        self.assertFalse(
+            CORE.LandingRegion((0.0, 0.0), (0.0, 0.1)).valid()
+        )
+
     def test_startup_reset_requires_disabled_loiter_disarmed_and_landed(self):
         self.assertTrue(CORE.startup_reset_ready("DISABLED", True, False, True))
         self.assertFalse(
@@ -106,6 +132,33 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertIn("px4_odometry", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertNotIn("px4_status", CORE.CONTINUOUS_FLIGHT_TOPICS)
         self.assertNotIn("land_status", CORE.CONTINUOUS_FLIGHT_TOPICS)
+
+    def test_clock_uses_independent_stale_timeout(self):
+        ages = {
+            "clock": 2.0,
+            "raw_pose": 0.1,
+            "raw_twist": 0.1,
+            "pointcloud": 0.1,
+            "px4_sensor": 0.1,
+            "px4_odometry": 0.1,
+            "nav_odometry": 0.1,
+            "planner_state": 0.1,
+        }
+        self.assertEqual(
+            CORE.stale_flight_topics(ages, 1.5, 5.0),
+            [],
+        )
+        ages["clock"] = 5.01
+        self.assertEqual(
+            CORE.stale_flight_topics(ages, 1.5, 5.0),
+            ["clock"],
+        )
+        ages["clock"] = 0.1
+        ages["px4_sensor"] = 1.51
+        self.assertEqual(
+            CORE.stale_flight_topics(ages, 1.5, 5.0),
+            ["px4_sensor"],
+        )
 
     def test_parses_cargo_boolean_tokens(self):
         text = "payload_locked=True prearm_support=false"
@@ -145,7 +198,9 @@ class HoverProbeCoreTest(unittest.TestCase):
         )
 
     def test_executor_lifecycle_ignores_interleaved_event_messages(self):
-        state = CORE.update_executor_lifecycle("", "LIFECYCLE COMPLETE")
+        state = CORE.update_executor_lifecycle(
+            "", "LIFECYCLE COMPLETE fixed_setpoint_enabled=true"
+        )
         self.assertEqual(state, "COMPLETE")
         state = CORE.update_executor_lifecycle(state, "GROUND_DISARM_COMMAND_SENT")
         self.assertEqual(state, "COMPLETE")

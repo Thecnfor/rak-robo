@@ -285,6 +285,16 @@ bool freshPlannerMapReady(
          state_received && map_ready && state_age_seconds <= timeout_seconds;
 }
 
+bool fixedSetpointReady(
+  bool diagnostic_enabled,
+  bool setpoint_received,
+  double setpoint_age_seconds,
+  double timeout_seconds)
+{
+  return diagnostic_enabled && setpoint_received && timeout_seconds >= 0.0 &&
+         setpoint_age_seconds >= 0.0 && setpoint_age_seconds <= timeout_seconds;
+}
+
 std::optional<bool> boolTokenValue(
   const std::string & text,
   const std::string & key)

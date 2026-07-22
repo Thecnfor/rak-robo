@@ -17,6 +17,9 @@
     odometry_hold_timeout: 0.60
     data_land_timeout: 1.2
     planner_map_timeout: 0.60
+    fixed_setpoint_timeout: 0.60
+    # Diagnostic-only direct position intent. Competition bringup keeps this off.
+    allow_fixed_setpoint_diagnostic: false
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.

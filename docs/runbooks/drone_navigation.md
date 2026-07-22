@@ -196,6 +196,26 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p output_path:=/tmp/prearm_support_acceptance.json
 ```
 
+固定设定点诊断默认关闭，只有定位 PX4/机体模型问题时显式开启；它仍通过 supervisor
+提交意图，`trajectory_executor` 保持 `/fmu/in/*` 唯一写入者：
+
+```bash
+ros2 launch drone_navigation_pkg navigation.launch.py \
+  allow_fixed_setpoint_diagnostic:=true
+ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
+  -p preflight_only:=false \
+  -p fixed_setpoint_diagnostic:=true \
+  -p fixed_step_clearances:="[0.10]" \
+  -p fixed_hold_altitude:=1.23
+```
+
+探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
+里程计仍为 1.5 s；固定阶梯若水平偏移 >0.20 m、低于 home >0.10 m、速度 >0.5 m/s
+或倾角 >20°，会先尝试返回落区再 LAND。中断或降落确认延迟时，进程持续发布安全
+意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。2026-07-22 的四轮证据见
+`docs/project/drone_fixed_setpoint_evidence_2026-07-22.json`；当前不得继续放飞，须先
+把窄支架改成无 joint 的横向限位起飞托架并重做 +0.10 m 票据。
+
 现场的拒绝/通过对照数据见
 `docs/project/prearm_pose_gate_evidence_2026-07-22.json`。
 

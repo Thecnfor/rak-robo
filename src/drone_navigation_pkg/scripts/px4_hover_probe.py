@@ -37,11 +37,14 @@ from std_msgs.msg import String
 
 from hover_probe_core import (
     CONTINUOUS_FLIGHT_TOPICS,
+    LandingRegion,
     PrearmPoseLimits,
     PrearmPoseSample,
     RateWindow,
     StabilityWindow,
     ground_observation_usable,
+    fixed_step_reached,
+    fixed_step_envelope_safe,
     normalized_node_names,
     parse_bool_token,
     phase_elapsed_seconds,
@@ -49,6 +52,7 @@ from hover_probe_core import (
     prearm_pose_allowed,
     quaternion_roll_pitch_degrees,
     sole_writer_is,
+    stale_flight_topics,
     startup_reset_ready,
     takeoff_goal_reached,
     update_executor_lifecycle,
@@ -74,10 +78,37 @@ class HoverProbe(Node):
         self.flight_data_timeout = float(
             self.declare_parameter("flight_data_timeout", 1.5).value
         )
+        self.flight_clock_timeout = float(
+            self.declare_parameter("flight_clock_timeout", 5.0).value
+        )
         self.planner_map_timeout = float(
             self.declare_parameter("planner_map_timeout", 0.6).value
         )
         self.preflight_only = bool(self.declare_parameter("preflight_only", True).value)
+        self.fixed_setpoint_diagnostic = bool(
+            self.declare_parameter("fixed_setpoint_diagnostic", False).value
+        )
+        self.fixed_step_clearances = tuple(
+            float(value)
+            for value in self.declare_parameter(
+                "fixed_step_clearances", [0.10, 0.20]
+            ).value
+        )
+        self.fixed_hold_altitude = float(
+            self.declare_parameter("fixed_hold_altitude", 1.30).value
+        )
+        self.fixed_step_settle_seconds = float(
+            self.declare_parameter("fixed_step_settle_seconds", 2.0).value
+        )
+        landing_half_extents = tuple(
+            float(value)
+            for value in self.declare_parameter(
+                "landing_half_extents", [0.18, 0.18]
+            ).value
+        )
+        self.landing_return_timeout = float(
+            self.declare_parameter("landing_return_timeout", 15.0).value
+        )
         spawn = list(
             self.declare_parameter(
                 "prearm_spawn_position", [4.55, -0.38, 1.13]
@@ -97,6 +128,10 @@ class HoverProbe(Node):
                 self.declare_parameter("prearm_max_tilt_deg", 3.0).value
             ),
         )
+        self.landing_region = LandingRegion(
+            center_xy=tuple(self.prearm_limits.expected_position[:2]),
+            half_extents_xy=landing_half_extents,
+        )
         self.output_path = Path(
             str(self.declare_parameter("output_path", "/tmp/drone_hover_probe.json").value)
         )
@@ -105,10 +140,28 @@ class HoverProbe(Node):
             or self.hover_seconds <= 0.0
             or self.land_wall_timeout <= 0.0
             or self.flight_data_timeout <= 0.0
+            or self.flight_clock_timeout <= 0.0
             or self.planner_map_timeout <= 0.0
             or self.prearm_limits.position_tolerance_m < 0.0
             or self.prearm_limits.max_speed_mps < 0.0
             or self.prearm_limits.max_tilt_deg < 0.0
+            or not self.fixed_step_clearances
+            or any(
+                clearance <= 0.0 or clearance > 0.30
+                for clearance in self.fixed_step_clearances
+            )
+            or any(
+                later <= earlier
+                for earlier, later in zip(
+                    self.fixed_step_clearances,
+                    self.fixed_step_clearances[1:],
+                )
+            )
+            or self.fixed_hold_altitude <= self.prearm_limits.expected_position[2]
+            or self.fixed_hold_altitude > self.prearm_limits.expected_position[2] + 0.30
+            or self.fixed_step_settle_seconds <= 0.0
+            or self.landing_return_timeout <= 0.0
+            or not self.landing_region.valid()
         ):
             raise ValueError("probe durations and timeouts must be positive")
 
@@ -229,9 +282,20 @@ class HoverProbe(Node):
         self.hold_max_altitude_error = 0.0
         self.hold_max_speed = 0.0
         self.abort_reset_since = None
+        self.abort_landing_timeout_reported = False
+        self.commanded_goal = None
+        self.fixed_step_index = 0
+        self.fixed_settle_since = None
+        self.fixed_settle_since_sim_ns = None
+        self.abort_return_altitude = None
+        self.touchdown_position = None
         self.last_gates = {}
         self.timer = self.create_timer(0.1, self._tick)
-        self._event("probe_started", preflight_only=self.preflight_only)
+        self._event(
+            "probe_started",
+            preflight_only=self.preflight_only,
+            fixed_setpoint_diagnostic=self.fixed_setpoint_diagnostic,
+        )
 
     @staticmethod
     def _now():
@@ -321,19 +385,28 @@ class HoverProbe(Node):
         publisher.publish(message)
 
     def _publish_goal(self):
-        if self.home_nav is None:
+        target = self.commanded_goal
+        if target is None:
+            if self.home_nav is None:
+                return
+            target = (self.home_nav[0], self.home_nav[1], self.goal_altitude)
+        if len(target) != 3:
             return
         goal = PoseStamped()
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.header.frame_id = "map"
-        goal.pose.position.x = self.home_nav[0]
-        goal.pose.position.y = self.home_nav[1]
-        goal.pose.position.z = self.goal_altitude
+        goal.pose.position.x = target[0]
+        goal.pose.position.y = target[1]
+        goal.pose.position.z = target[2]
         goal.pose.orientation.w = 1.0
         self.goal_pub.publish(goal)
 
     def _publish_mode(self, mode):
         self._publish_text(self.mode_pub, mode)
+
+    def _command_goal(self, position):
+        self.commanded_goal = tuple(position)
+        self._publish_goal()
 
     def _periodic_cargo_setup(self, now):
         if now - self.last_periodic_command < 0.5:
@@ -395,7 +468,11 @@ class HoverProbe(Node):
         # supported-airframe stability is an equivalent pre-arm observation.
         grounded = self._landed() or stability.passes()
         gates = {
-            "clock_monotonic": self.clock_monotonic and rates["clock"] >= 2.0 and ages["clock"] <= 0.5,
+            "clock_monotonic": (
+                self.clock_monotonic
+                and rates["clock"] >= 2.0
+                and ages["clock"] <= 0.5
+            ),
             "raw_pose": rates["raw_pose"] >= 5.0 and ages["raw_pose"] <= 0.4,
             "raw_twist": rates["raw_twist"] >= 5.0 and ages["raw_twist"] <= 0.4,
             "pointcloud": rates["pointcloud"] >= 2.0 and ages["pointcloud"] <= 0.45,
@@ -413,6 +490,13 @@ class HoverProbe(Node):
                 ages["planner_state"],
                 self.planner_map_timeout,
             ),
+            "fixed_diagnostic_enabled": (
+                not self.fixed_setpoint_diagnostic
+                or parse_bool_token(
+                    self.executor_state, "fixed_setpoint_enabled"
+                ) is True
+            ),
+            "landing_region_valid": self.landing_region.valid(),
             "px4_ready": bool(status and status.pre_flight_checks_pass and not status.failsafe),
             "disarmed": not self._armed(),
             "landed_or_supported": grounded,
@@ -452,6 +536,10 @@ class HoverProbe(Node):
             "writers": writers,
             "executor_state": self.executor_state,
             "planner_state": self.planner_state,
+            "landing_region": {
+                "center_xy": self.landing_region.center_xy,
+                "half_extents_xy": self.landing_region.half_extents_xy,
+            },
         }
         return gates, details
 
@@ -471,17 +559,63 @@ class HoverProbe(Node):
             )
         return now - self.phase_started
 
+    def _fixed_target_errors(self, target):
+        if self.raw_position is None:
+            return float("inf"), float("inf")
+        return (
+            math.hypot(
+                self.raw_position[0] - target[0],
+                self.raw_position[1] - target[1],
+            ),
+            abs(self.raw_position[2] - target[2]),
+        )
+
+    def _fixed_target_settled(self, target, now):
+        horizontal_error, altitude_error = self._fixed_target_errors(target)
+        reached = fixed_step_reached(
+            horizontal_error,
+            altitude_error,
+            self.raw_speed,
+        )
+        if reached:
+            if self.fixed_settle_since is None:
+                self.fixed_settle_since = now
+                self.fixed_settle_since_sim_ns = self.clock_last_ns
+        else:
+            self.fixed_settle_since = None
+            self.fixed_settle_since_sim_ns = None
+        elapsed = phase_elapsed_seconds(
+            self.fixed_settle_since or now,
+            now,
+            self.fixed_settle_since_sim_ns,
+            self.clock_last_ns,
+        )
+        return reached and elapsed >= self.fixed_step_settle_seconds
+
     def _stale_flight_topics(self, now):
-        return [
-            name
+        ages = {
+            name: self.trackers[name].age(now)
             for name in CONTINUOUS_FLIGHT_TOPICS
-            if self.trackers[name].age(now) > self.flight_data_timeout
-        ]
+        }
+        return stale_flight_topics(
+            ages,
+            self.flight_data_timeout,
+            self.flight_clock_timeout,
+        )
 
     def _begin_round(self):
         self.current_round += 1
         self.home_nav = tuple(self.nav_position)
         self.home_raw = tuple(self.raw_position)
+        self.landing_region = LandingRegion(
+            center_xy=tuple(self.home_raw[:2]),
+            half_extents_xy=self.landing_region.half_extents_xy,
+        )
+        self.commanded_goal = tuple(self.home_nav)
+        self.fixed_step_index = 0
+        self.fixed_settle_since = None
+        self.fixed_settle_since_sim_ns = None
+        self.abort_return_altitude = None
         self.goal_stable_since = None
         self.goal_stable_since_sim_ns = None
         self.hold_max_horizontal_error = 0.0
@@ -489,12 +623,44 @@ class HoverProbe(Node):
         self.hold_max_speed = 0.0
         self._set_phase("ARM")
 
-    def _abort(self, reason):
+    def _abort(self, reason, emergency=False):
         if self.phase in {"ABORT", "DONE"}:
             return
+        if self.phase == "ABORT_RETURN":
+            if emergency:
+                self.failure_reason = reason
+                self._event(
+                    "abort_return_emergency",
+                    reason=reason,
+                    round=self.current_round,
+                )
+                self._set_phase("ABORT")
+            return
         self.failure_reason = reason
-        self._event("abort", reason=reason, round=self.current_round)
-        self._set_phase("ABORT")
+        self._event(
+            "abort",
+            reason=reason,
+            round=self.current_round,
+            emergency=emergency,
+        )
+        recoverable = (
+            self.fixed_setpoint_diagnostic
+            and not emergency
+            and self._armed()
+            and self._offboard()
+            and self.home_nav is not None
+            and self.raw_position is not None
+        )
+        if recoverable:
+            self.abort_return_altitude = max(
+                self.home_nav[2] + self.fixed_step_clearances[-1],
+                self.raw_position[2],
+            )
+            self.fixed_settle_since = None
+            self.fixed_settle_since_sim_ns = None
+            self._set_phase("ABORT_RETURN")
+        else:
+            self._set_phase("ABORT")
 
     def _finish(self, success):
         if self.finished:
@@ -511,6 +677,14 @@ class HoverProbe(Node):
             "completed_rounds": len(self.round_results),
             "hover_seconds": self.hover_seconds,
             "goal_altitude": self.goal_altitude,
+            "fixed_setpoint_diagnostic": self.fixed_setpoint_diagnostic,
+            "fixed_step_clearances": self.fixed_step_clearances,
+            "fixed_hold_altitude": self.fixed_hold_altitude,
+            "landing_region": {
+                "center_xy": self.landing_region.center_xy,
+                "half_extents_xy": self.landing_region.half_extents_xy,
+            },
+            "touchdown_position": self.touchdown_position,
             "preflight_gates": self.last_gates,
             "rounds": self.round_results,
             "events": self.events,
@@ -573,26 +747,119 @@ class HoverProbe(Node):
             return
 
         if self.vehicle_status and self.vehicle_status.failsafe:
-            self._abort("PX4 failsafe active")
+            self._abort("PX4 failsafe active", emergency=True)
         stale_topics = self._stale_flight_topics(now)
         if self.phase not in {"LAND", "RESET", "ABORT"} and stale_topics:
             self._abort(
                 "flight telemetry stale for more than "
-                f"{self.flight_data_timeout:g} seconds: {','.join(stale_topics)}"
+                f"its configured timeout: {','.join(stale_topics)}",
+                emergency=True,
             )
         if (
             self.phase not in {"LAND", "RESET", "ABORT"}
             and self.executor_lifecycle == "LAND_LATCHED"
         ):
-            self._abort("executor entered terminal landing latch")
+            self._abort("executor entered terminal landing latch", emergency=True)
 
         if self.phase == "ARM":
             self._publish_goal()
-            self._publish_mode("ARM_OFFBOARD")
+            self._publish_mode(
+                "ARM_FIXED" if self.fixed_setpoint_diagnostic else "ARM_OFFBOARD"
+            )
             if self._armed() and self._offboard() and self.executor_lifecycle == "ACTIVE":
-                self._set_phase("ASCEND")
+                self._set_phase(
+                    "FIXED_STEP" if self.fixed_setpoint_diagnostic else "ASCEND"
+                )
             elif now - self.phase_started > 25.0:
                 self._abort("arming/offboard timeout")
+        elif self.phase == "FIXED_STEP":
+            clearance = self.fixed_step_clearances[self.fixed_step_index]
+            target = (
+                self.home_nav[0],
+                self.home_nav[1],
+                self.home_nav[2] + clearance,
+            )
+            self._command_goal(target)
+            self._publish_mode("FIXED")
+            horizontal_from_home = math.hypot(
+                self.raw_position[0] - self.home_raw[0],
+                self.raw_position[1] - self.home_raw[1],
+            )
+            drop_below_home = max(0.0, self.home_raw[2] - self.raw_position[2])
+            max_tilt = max(abs(self.raw_roll), abs(self.raw_pitch))
+            if not fixed_step_envelope_safe(
+                horizontal_from_home,
+                drop_below_home,
+                self.raw_speed,
+                max_tilt,
+            ):
+                self._abort(
+                    "fixed step safety envelope violated: "
+                    f"horizontal={horizontal_from_home:.3f}m "
+                    f"drop={drop_below_home:.3f}m "
+                    f"speed={self.raw_speed:.3f}m/s tilt={max_tilt:.1f}deg"
+                )
+            elif self._fixed_target_settled(target, now):
+                self._event(
+                    "fixed_step_passed",
+                    index=self.fixed_step_index,
+                    clearance_m=clearance,
+                    target=target,
+                )
+                self.fixed_step_index += 1
+                self.fixed_settle_since = None
+                self.fixed_settle_since_sim_ns = None
+                if self.fixed_step_index >= len(self.fixed_step_clearances):
+                    self._set_phase("FIXED_HOLD_SETTLE")
+            elif self._phase_elapsed(now, use_sim_time=True) > 15.0:
+                self._abort(f"fixed step {clearance:.2f} m timeout")
+        elif self.phase == "FIXED_HOLD_SETTLE":
+            target = (
+                self.home_nav[0],
+                self.home_nav[1],
+                self.fixed_hold_altitude,
+            )
+            self._command_goal(target)
+            self._publish_mode("FIXED")
+            if self._fixed_target_settled(target, now):
+                self._set_phase("FIXED_HOLD")
+            elif self._phase_elapsed(now, use_sim_time=True) > 15.0:
+                self._abort("fixed hold target timeout")
+        elif self.phase == "FIXED_HOLD":
+            target = (
+                self.home_nav[0],
+                self.home_nav[1],
+                self.fixed_hold_altitude,
+            )
+            self._command_goal(target)
+            self._publish_mode("FIXED")
+            horizontal, altitude_error = self._fixed_target_errors(target)
+            self.hold_max_horizontal_error = max(
+                self.hold_max_horizontal_error, horizontal
+            )
+            self.hold_max_altitude_error = max(
+                self.hold_max_altitude_error, altitude_error
+            )
+            self.hold_max_speed = max(self.hold_max_speed, self.raw_speed)
+            if horizontal > 0.30 or altitude_error > 0.20:
+                self._abort("fixed hold envelope violated")
+            elif self._phase_elapsed(now, use_sim_time=True) >= self.hover_seconds:
+                self.fixed_settle_since = None
+                self.fixed_settle_since_sim_ns = None
+                self._set_phase("RETURN_HOME")
+        elif self.phase == "RETURN_HOME":
+            target = (
+                self.home_nav[0],
+                self.home_nav[1],
+                self.home_nav[2] + self.fixed_step_clearances[-1],
+            )
+            self._command_goal(target)
+            self._publish_mode("FIXED")
+            inside_region = self.landing_region.contains(tuple(self.raw_position[:2]))
+            if inside_region and self._fixed_target_settled(target, now):
+                self._set_phase("LAND")
+            elif self._phase_elapsed(now, use_sim_time=True) > self.landing_return_timeout:
+                self._abort("return to landing region timeout")
         elif self.phase == "ASCEND":
             self._publish_goal()
             self._publish_mode("TRAJECTORY")
@@ -640,8 +907,17 @@ class HoverProbe(Node):
             elif self._phase_elapsed(now, use_sim_time=True) >= self.hover_seconds:
                 self._set_phase("LAND")
         elif self.phase == "LAND":
+            if (
+                self.fixed_setpoint_diagnostic
+                and self._armed()
+                and self.raw_position is not None
+                and not self.landing_region.contains(tuple(self.raw_position[:2]))
+            ):
+                self._abort("left landing region before NAV_LAND")
+                return
             self._publish_mode("LAND")
             if self._landed() and not self._armed() and self.executor_lifecycle == "COMPLETE":
+                self.touchdown_position = tuple(self.raw_position) if self.raw_position else None
                 self.round_results.append(
                     {
                         "round": self.current_round,
@@ -682,25 +958,51 @@ class HoverProbe(Node):
                 self._publish_mode("RESET")
                 if now - self.abort_reset_since >= 1.0:
                     self._finish(False)
-            elif now - self.phase_started > 90.0:
-                self.failure_reason += "; emergency landing confirmation timeout"
-                self._finish(False)
+            elif (
+                now - self.phase_started > self.land_wall_timeout
+                and not self.abort_landing_timeout_reported
+            ):
+                self.abort_landing_timeout_reported = True
+                self.failure_reason += "; emergency landing confirmation delayed"
+                self._event("abort_landing_delayed", round=self.current_round)
             else:
                 self._publish_mode("LAND")
+        elif self.phase == "ABORT_RETURN":
+            target = (
+                self.home_nav[0],
+                self.home_nav[1],
+                self.abort_return_altitude,
+            )
+            self._command_goal(target)
+            self._publish_mode("FIXED")
+            inside_region = self.landing_region.contains(tuple(self.raw_position[:2]))
+            if inside_region and self._fixed_target_settled(target, now):
+                self._event("abort_return_ready", target=target)
+                self._set_phase("ABORT")
+            elif self._phase_elapsed(now, use_sim_time=True) > self.landing_return_timeout:
+                self._event("abort_return_timeout", target=target)
+                self._set_phase("ABORT")
 
 
 def main(args=None):
     # Keep the ROS context alive on Ctrl-C long enough to publish and latch LAND.
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = HoverProbe()
+    interrupted = False
     try:
         while rclpy.ok() and not node.finished:
-            rclpy.spin_once(node, timeout_sec=0.2)
-    except KeyboardInterrupt:
-        node._abort("operator interrupt")
-        deadline = time.monotonic() + 10.0
-        while rclpy.ok() and not node.finished and time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.1)
+            try:
+                rclpy.spin_once(node, timeout_sec=0.2)
+            except KeyboardInterrupt:
+                if interrupted:
+                    node._abort("repeated operator interrupt", emergency=True)
+                else:
+                    node._abort("operator interrupt")
+                    interrupted = True
+                # Keep spinning until landed/disarmed. With a low simulator
+                # real-time factor, a fixed wall-time grace period can expire
+                # while the aircraft is still armed and would orphan ACTIVE.
+                continue
     finally:
         node.destroy_node()
         if rclpy.ok():

@@ -24,6 +24,7 @@ using drone_navigation::Vec3;
 using drone_navigation::VoxelPlanner;
 using drone_navigation::executorSafetyAction;
 using drone_navigation::boolTokenValue;
+using drone_navigation::fixedSetpointReady;
 
 namespace
 {
@@ -335,6 +336,15 @@ TEST(PlannerMapGate, RequiresFreshSuccessfulMapUpdate)
   EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, false, 0.20, 0.60));
   EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, true, 0.61, 0.60));
   EXPECT_FALSE(drone_navigation::freshPlannerMapReady(true, true, 0.20, -0.01));
+}
+
+TEST(FixedSetpointGate, RequiresExplicitEnablementAndFreshTarget)
+{
+  EXPECT_TRUE(fixedSetpointReady(true, true, 0.2, 0.6));
+  EXPECT_FALSE(fixedSetpointReady(false, true, 0.2, 0.6));
+  EXPECT_FALSE(fixedSetpointReady(true, false, 0.2, 0.6));
+  EXPECT_FALSE(fixedSetpointReady(true, true, 0.61, 0.6));
+  EXPECT_FALSE(fixedSetpointReady(true, true, -0.1, 0.6));
 }
 
 TEST(Px4DiscreteState, UsesCachedStateOnlyWhileContinuousTransportIsAlive)

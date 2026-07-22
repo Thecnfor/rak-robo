@@ -82,6 +82,7 @@ PX4 输出订阅使用 `BEST_EFFORT/VOLATILE`。Offboard 以 20 Hz 发送，先�
 | 输入 | `/drone/navigation/mission_request` | `std_msgs/Bool` |
 | supervisor → planner | `/drone/navigation/goal` | `geometry_msgs/PoseStamped`, frame `map` |
 | supervisor → executor | `/drone/navigation/control_mode` | `std_msgs/String` |
+| supervisor → executor | `/drone/navigation/fixed_setpoint` | `geometry_msgs/PoseStamped`, frame `map`；仅显式诊断模式 |
 | orchestrator → supervisor | `/drone/navigation/operator_{goal,mode}` | 公共 action 的仲裁请求 |
 | 输入 | `/drone/drop_target_offset` | `[nx, ny, area_fraction, radius_px]` |
 | 输出 | `/drone/navigation/odometry` | `nav_msgs/Odometry`, PX4 NED/FRD → map ENU/FLU |
@@ -100,6 +101,12 @@ IDLE → PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH
 
 数据陈旧或 PX4 failsafe 进入 `HOLD`：0.60 秒悬停，1.20 秒请求 PX4 Land。
 安全新鲜度使用 steady wall time；轨迹采样使用 `/clock`。
+
+`ARM_FIXED/FIXED` 是 PX4 定点控制诊断模式：必须同时以 launch 参数显式设置
+`allow_fixed_setpoint_diagnostic=true`，默认和比赛主链均为 `false`。它绕开 EGO 轨迹
+消费以隔离 PX4/机模跟踪问题，但仍由 supervisor 仲裁、由 `trajectory_executor` 独占
+三个 `/fmu/in/*`。固定目标超过 `fixed_setpoint_timeout` 未更新即进入既有 HOLD/LAND
+watchdog，不能用该模式替代比赛导航。
 
 ## 视觉、舱门和地空协调
 

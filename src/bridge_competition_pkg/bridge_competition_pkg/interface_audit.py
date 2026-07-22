@@ -45,6 +45,7 @@ PX4_REQUIRED_TOPICS = [
     '/fmu/out/vehicle_status',
     '/fmu/out/vehicle_command_ack',
     '/fmu/out/vehicle_land_detected',
+    '/drone/navigation/fixed_setpoint',
     '/fmu/in/offboard_control_mode',
     '/fmu/in/trajectory_setpoint',
     '/fmu/in/vehicle_command',

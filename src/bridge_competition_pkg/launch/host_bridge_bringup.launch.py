@@ -29,14 +29,24 @@ def _launch(package: str, filename: str):
 def generate_launch_description() -> LaunchDescription:
     record_bag = LaunchConfiguration('record_bag')
     report_path = LaunchConfiguration('interface_report_path')
+    fixed_diagnostic = LaunchConfiguration('allow_fixed_setpoint_diagnostic')
     return LaunchDescription([
         DeclareLaunchArgument('record_bag', default_value='false'),
         DeclareLaunchArgument(
             'interface_report_path',
             default_value='/tmp/drone_interface_report.json',
         ),
+        DeclareLaunchArgument(
+            'allow_fixed_setpoint_diagnostic',
+            default_value='false',
+        ),
         # 业务节点
-        IncludeLaunchDescription(_launch('drone_navigation_pkg', 'navigation.launch.py')),
+        IncludeLaunchDescription(
+            _launch('drone_navigation_pkg', 'navigation.launch.py'),
+            launch_arguments={
+                'allow_fixed_setpoint_diagnostic': fixed_diagnostic,
+            }.items(),
+        ),
         IncludeLaunchDescription(_launch('perception_competition_pkg', 'drone_target.launch.py')),
         IncludeLaunchDescription(_launch('perception_competition_pkg', 'ground_perception.launch.py')),
         IncludeLaunchDescription(

@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "px4_msgs/msg/offboard_control_mode.hpp"
@@ -34,6 +35,7 @@ public:
   TrajectoryExecutorNode()
   : Node("trajectory_executor")
   {
+    map_frame_ = declare_parameter<std::string>("map_frame", "map");
     prestream_seconds_ = declare_parameter<double>("offboard_prestream_seconds", 1.0);
     hold_timeout_ = declare_parameter<double>("odometry_hold_timeout", 0.3);
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
@@ -41,6 +43,10 @@ public:
       "minimum_replan_execution_seconds", 1.0);
     ground_disarm_delay_seconds_ = declare_parameter<double>(
       "ground_disarm_delay_seconds", 2.0);
+    allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
+      "allow_fixed_setpoint_diagnostic", false);
+    fixed_setpoint_timeout_ = declare_parameter<double>(
+      "fixed_setpoint_timeout", 0.6);
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
       throw std::runtime_error("executor watchdog timeouts must be non-negative and ordered");
     }
@@ -49,6 +55,9 @@ public:
     }
     if (ground_disarm_delay_seconds_ < 0.0) {
       throw std::runtime_error("ground disarm delay must be non-negative");
+    }
+    if (fixed_setpoint_timeout_ <= 0.0) {
+      throw std::runtime_error("fixed_setpoint_timeout must be positive");
     }
     const auto origin = declare_parameter<std::vector<double>>(
       "px4_map_origin", {4.55, -0.38, 1.13});
@@ -75,6 +84,9 @@ public:
     visual_velocity_subscription_ = create_subscription<geometry_msgs::msg::TwistStamped>(
       "/drone/navigation/visual_velocity", rclcpp::QoS(10),
       std::bind(&TrajectoryExecutorNode::onVisualVelocity, this, std::placeholders::_1));
+    fixed_setpoint_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/drone/navigation/fixed_setpoint", rclcpp::QoS(1).transient_local(),
+      std::bind(&TrajectoryExecutorNode::onFixedSetpoint, this, std::placeholders::_1));
     odometry_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
       "/drone/navigation/odometry", rclcpp::QoS(20),
       std::bind(&TrajectoryExecutorNode::onOdometry, this, std::placeholders::_1));
@@ -90,7 +102,7 @@ public:
   }
 
 private:
-  enum class Mode {DISABLED, TRAJECTORY, HOLD, VISUAL, LAND};
+  enum class Mode {DISABLED, TRAJECTORY, FIXED, HOLD, VISUAL, LAND};
   using SteadyTime = std::chrono::steady_clock::time_point;
 
   static double durationSeconds(const builtin_interfaces::msg::Duration & duration)
@@ -140,19 +152,38 @@ private:
     const std::string requested = message->data;
     Mode new_mode = Mode::DISABLED;
     ExecutorRequestedMode new_request = ExecutorRequestedMode::DISABLED;
-    if (requested == "ARM_OFFBOARD") {
+    if (requested == "ARM_OFFBOARD" || requested == "ARM_FIXED") {
+      const bool fixed_request = requested == "ARM_FIXED";
+      if (fixed_request && !allow_fixed_setpoint_diagnostic_) {
+        publishState("REJECTED fixed_setpoint_diagnostic_disabled");
+        return;
+      }
       if (lifecycle_.state() == ExecutorFlightState::DISABLED) {
-        const bool fresh_inputs = have_odometry_ && have_trajectory_ &&
+        const bool control_source_ready = fixed_request ?
+          fixedSetpointReady(
+            allow_fixed_setpoint_diagnostic_, have_fixed_setpoint_,
+            ageOrInfinity(last_fixed_setpoint_), fixed_setpoint_timeout_) :
+          (have_trajectory_ && ageOrInfinity(last_trajectory_) <= hold_timeout_);
+        const bool fresh_inputs = have_odometry_ && control_source_ready &&
           ageOrInfinity(last_odometry_) <= hold_timeout_ &&
-          ageOrInfinity(last_trajectory_) <= hold_timeout_ &&
           px4DiscreteStateUsable(have_status_, ageOrInfinity(last_odometry_), hold_timeout_);
         if (!fresh_inputs || !px4_ready_ || failsafe_ || !landed_known_ || !landed_ || armed_) {
           publishState("REJECTED arm_preflight_gate");
           return;
         }
       }
-      new_mode = Mode::TRAJECTORY;
+      new_mode = fixed_request ? Mode::FIXED : Mode::TRAJECTORY;
       new_request = ExecutorRequestedMode::ARM_TRAJECTORY;
+    } else if (requested == "FIXED") {
+      if (!fixedSetpointReady(
+          allow_fixed_setpoint_diagnostic_, have_fixed_setpoint_,
+          ageOrInfinity(last_fixed_setpoint_), fixed_setpoint_timeout_))
+      {
+        publishState("REJECTED fixed_setpoint_gate");
+        return;
+      }
+      new_mode = Mode::FIXED;
+      new_request = ExecutorRequestedMode::TRAJECTORY;
     } else if (requested == "TRAJECTORY" || requested == "TAKEOFF" || requested == "RETURN") {
       new_mode = Mode::TRAJECTORY;
       new_request = ExecutorRequestedMode::TRAJECTORY;
@@ -202,6 +233,7 @@ private:
     if (new_request == ExecutorRequestedMode::RESET) {
       have_trajectory_ = false;
       trajectory_started_ = false;
+      have_fixed_setpoint_ = false;
     }
     requested_mode_ = new_request;
   }
@@ -211,6 +243,35 @@ private:
     visual_velocity_ = {
       message->twist.linear.x, message->twist.linear.y, message->twist.linear.z};
     last_visual_velocity_ = steadyNow();
+  }
+
+  void onFixedSetpoint(const geometry_msgs::msg::PoseStamped::SharedPtr message)
+  {
+    if (!allow_fixed_setpoint_diagnostic_) {
+      publishState("REJECTED fixed_setpoint_diagnostic_disabled");
+      return;
+    }
+    const auto & position = message->pose.position;
+    const auto & orientation = message->pose.orientation;
+    const double orientation_norm_squared =
+      orientation.x * orientation.x + orientation.y * orientation.y +
+      orientation.z * orientation.z + orientation.w * orientation.w;
+    if (message->header.frame_id != map_frame_ ||
+      !std::isfinite(position.x) || !std::isfinite(position.y) ||
+      !std::isfinite(position.z) || !std::isfinite(orientation_norm_squared) ||
+      std::abs(orientation_norm_squared - 1.0) > 0.01)
+    {
+      publishState("REJECTED invalid_fixed_setpoint");
+      return;
+    }
+    fixed_position_ = {position.x, position.y, position.z};
+    const double sin_yaw = 2.0 *
+      (orientation.w * orientation.z + orientation.x * orientation.y);
+    const double cos_yaw = 1.0 - 2.0 *
+      (orientation.y * orientation.y + orientation.z * orientation.z);
+    fixed_yaw_ = std::atan2(sin_yaw, cos_yaw);
+    have_fixed_setpoint_ = true;
+    last_fixed_setpoint_ = steadyNow();
   }
 
   void onOdometry(const nav_msgs::msg::Odometry::SharedPtr message)
@@ -266,12 +327,14 @@ private:
       }
     } else if (watchdog_active) {
       const bool trajectory_expected =
-        mode_ == Mode::TRAJECTORY && armed_ && offboard_;
+        (mode_ == Mode::TRAJECTORY || mode_ == Mode::FIXED) && armed_ && offboard_;
+      const double control_source_age = mode_ == Mode::FIXED ?
+        ageOrInfinity(last_fixed_setpoint_) : ageOrInfinity(last_trajectory_);
       const auto safety_action = executorSafetyAction(
         trajectory_expected,
         ageOrInfinity(last_odometry_),
         ageOrInfinity(last_control_intent_),
-        ageOrInfinity(last_trajectory_),
+        control_source_age,
         hold_timeout_,
         land_timeout_);
       if (safety_action == ExecutorSafetyAction::LAND) {
@@ -372,14 +435,18 @@ private:
     // Publish the current state as a heartbeat. Diagnostic events share this
     // transient-local topic, so a late joiner must not mistake an old event
     // for the lifecycle state.
+    std::string lifecycle;
     switch (state) {
-      case ExecutorFlightState::DISABLED: publishState("LIFECYCLE DISABLED"); break;
-      case ExecutorFlightState::PRESTREAM: publishState("LIFECYCLE PRESTREAM"); break;
-      case ExecutorFlightState::ACTIVE: publishState("LIFECYCLE ACTIVE"); break;
-      case ExecutorFlightState::HOLD: publishState("LIFECYCLE HOLD"); break;
-      case ExecutorFlightState::LAND_LATCHED: publishState("LIFECYCLE LAND_LATCHED"); break;
-      case ExecutorFlightState::COMPLETE: publishState("LIFECYCLE COMPLETE"); break;
+      case ExecutorFlightState::DISABLED: lifecycle = "DISABLED"; break;
+      case ExecutorFlightState::PRESTREAM: lifecycle = "PRESTREAM"; break;
+      case ExecutorFlightState::ACTIVE: lifecycle = "ACTIVE"; break;
+      case ExecutorFlightState::HOLD: lifecycle = "HOLD"; break;
+      case ExecutorFlightState::LAND_LATCHED: lifecycle = "LAND_LATCHED"; break;
+      case ExecutorFlightState::COMPLETE: lifecycle = "COMPLETE"; break;
     }
+    publishState(
+      "LIFECYCLE " + lifecycle + " fixed_setpoint_enabled=" +
+      (allow_fixed_setpoint_diagnostic_ ? "true" : "false"));
   }
 
   void publishOffboardControlMode(bool velocity_control)
@@ -421,7 +488,9 @@ private:
       setpoint.yaw = 0.0F;
     } else {
       auto state = holdState();
-      if (mode_ == Mode::TRAJECTORY && have_trajectory_ && trajectory_started_) {
+      if (mode_ == Mode::FIXED && have_fixed_setpoint_) {
+        state = fixedState();
+      } else if (mode_ == Mode::TRAJECTORY && have_trajectory_ && trajectory_started_) {
         state = trajectoryStateAt((now() - trajectory_start_).seconds());
       }
       const Vec3 ned_position = enuToNed(state.position);
@@ -449,6 +518,14 @@ private:
     TrajectoryState state;
     // PX4 local coordinates start at zero. Remove the configured map origin in the adapter path.
     state.position = hold_position_ - map_origin_;
+    return state;
+  }
+
+  TrajectoryState fixedState() const
+  {
+    TrajectoryState state;
+    state.position = fixed_position_ - map_origin_;
+    state.yaw = fixed_yaw_;
     return state;
   }
 
@@ -493,16 +570,20 @@ private:
   }
 
   double prestream_seconds_{1.0};
+  std::string map_frame_;
   double hold_timeout_{0.3};
   double land_timeout_{1.0};
   double minimum_replan_execution_seconds_{1.0};
   double ground_disarm_delay_seconds_{2.0};
+  double fixed_setpoint_timeout_{0.6};
+  bool allow_fixed_setpoint_diagnostic_{false};
   Vec3 map_origin_;
   Mode mode_{Mode::DISABLED};
   ExecutorRequestedMode requested_mode_{ExecutorRequestedMode::DISABLED};
   ExecutorLifecycle lifecycle_;
   navigation_message::Trajectory trajectory_;
   bool have_trajectory_{false};
+  bool have_fixed_setpoint_{false};
   bool trajectory_started_{false};
   bool have_odometry_{false};
   bool armed_{false};
@@ -517,6 +598,8 @@ private:
   Vec3 current_position_;
   Vec3 hold_position_;
   Vec3 visual_velocity_;
+  Vec3 fixed_position_;
+  double fixed_yaw_{0.0};
   rclcpp::Time trajectory_start_{0, 0, RCL_ROS_TIME};
   SteadyTime prestream_started_{};
   SteadyTime last_mode_command_{};
@@ -525,6 +608,7 @@ private:
   SteadyTime last_land_command_{};
   SteadyTime last_loiter_command_{};
   SteadyTime last_visual_velocity_{};
+  SteadyTime last_fixed_setpoint_{};
   SteadyTime last_odometry_{};
   SteadyTime last_control_intent_{};
   SteadyTime last_trajectory_{};
@@ -537,6 +621,7 @@ private:
   rclcpp::Subscription<navigation_message::Trajectory>::SharedPtr trajectory_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscription_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr visual_velocity_subscription_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr fixed_setpoint_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscription_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr status_subscription_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_subscription_;

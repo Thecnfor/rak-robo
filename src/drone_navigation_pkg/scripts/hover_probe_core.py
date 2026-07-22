@@ -6,7 +6,7 @@
 
 from collections import deque
 from dataclasses import dataclass
-from math import asin, atan2, copysign, degrees, sqrt
+from math import asin, atan2, copysign, degrees, isfinite, sqrt
 
 
 CONTINUOUS_FLIGHT_TOPICS = (
@@ -19,6 +19,20 @@ CONTINUOUS_FLIGHT_TOPICS = (
     "nav_odometry",
     "planner_state",
 )
+
+
+def stale_flight_topics(
+    ages: dict,
+    telemetry_timeout: float,
+    clock_timeout: float,
+):
+    """Return stale streams while allowing slow simulation clock delivery."""
+    stale = []
+    for name in CONTINUOUS_FLIGHT_TOPICS:
+        timeout = clock_timeout if name == "clock" else telemetry_timeout
+        if ages.get(name, float("inf")) > timeout:
+            stale.append(name)
+    return stale
 
 
 def phase_elapsed_seconds(start_wall, now_wall, start_sim_ns, now_sim_ns):
@@ -35,7 +49,10 @@ def phase_elapsed_seconds(start_wall, now_wall, start_sim_ns, now_sim_ns):
 def update_executor_lifecycle(current: str, event: str) -> str:
     """Latch lifecycle state while preserving it across diagnostic event messages."""
     prefix = "LIFECYCLE "
-    return event[len(prefix):] if event.startswith(prefix) else current
+    if not event.startswith(prefix):
+        return current
+    fields = event[len(prefix):].split()
+    return fields[0] if fields else current
 
 
 def parse_bool_token(text: str, key: str):
@@ -137,6 +154,32 @@ class PrearmPoseLimits:
     max_tilt_deg: float = 3.0
 
 
+@dataclass(frozen=True)
+class LandingRegion:
+    center_xy: tuple
+    half_extents_xy: tuple
+
+    def valid(self) -> bool:
+        return (
+            len(self.center_xy) == 2
+            and len(self.half_extents_xy) == 2
+            and all(isfinite(value) for value in self.center_xy)
+            and all(
+                isfinite(value) and value > 0.0
+                for value in self.half_extents_xy
+            )
+        )
+
+    def contains(self, position_xy: tuple) -> bool:
+        if not self.valid() or len(position_xy) != 2:
+            return False
+        return all(
+            abs(position_xy[index] - self.center_xy[index])
+            <= self.half_extents_xy[index] + 1e-9
+            for index in range(2)
+        )
+
+
 def prearm_pose_allowed(
     sample: PrearmPoseSample,
     limits: PrearmPoseLimits,
@@ -164,6 +207,39 @@ def prearm_pose_allowed(
     )
 
 
+def fixed_step_reached(
+    horizontal_error_m: float,
+    altitude_error_m: float,
+    speed_mps: float,
+    horizontal_tolerance_m: float = 0.10,
+    altitude_tolerance_m: float = 0.05,
+    max_speed_mps: float = 0.05,
+) -> bool:
+    """Require a fixed target to settle before advancing the step ladder."""
+    return (
+        0.0 <= horizontal_error_m <= horizontal_tolerance_m
+        and 0.0 <= altitude_error_m <= altitude_tolerance_m
+        and 0.0 <= speed_mps <= max_speed_mps
+    )
+
+
+def fixed_step_envelope_safe(
+    horizontal_displacement_m: float,
+    drop_below_home_m: float,
+    speed_mps: float,
+    max_tilt_deg_seen: float,
+    max_horizontal_displacement_m: float = 0.20,
+    max_drop_below_home_m: float = 0.10,
+    max_speed_mps: float = 0.50,
+    max_tilt_deg: float = 20.0,
+) -> bool:
+    """Bound the low-altitude diagnostic before it can leave the table."""
+    return (
+        0.0 <= horizontal_displacement_m <= max_horizontal_displacement_m
+        and 0.0 <= drop_below_home_m <= max_drop_below_home_m
+        and 0.0 <= speed_mps <= max_speed_mps
+        and 0.0 <= max_tilt_deg_seen <= max_tilt_deg
+    )
 class StabilityWindow:
     def __init__(self, horizon_seconds: float = 4.0):
         self._horizon = horizon_seconds

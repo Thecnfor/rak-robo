@@ -38,6 +38,8 @@ public:
   {
     map_frame_ = declare_parameter<std::string>("map_frame", "map");
     mission_autostart_ = declare_parameter<bool>("mission_autostart", false);
+    allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
+      "allow_fixed_setpoint_diagnostic", false);
     takeoff_height_ = declare_parameter<double>("takeoff_height", 1.8);
     hold_timeout_ = declare_parameter<double>("odometry_hold_timeout", 0.3);
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
@@ -83,6 +85,8 @@ public:
       "/drone/navigation/state", rclcpp::QoS(10).transient_local());
     goal_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/drone/navigation/goal", rclcpp::QoS(1).transient_local());
+    fixed_setpoint_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/drone/navigation/fixed_setpoint", rclcpp::QoS(1).transient_local());
     control_mode_publisher_ = create_publisher<std_msgs::msg::String>(
       "/drone/navigation/control_mode", rclcpp::QoS(10).transient_local());
     cargo_command_publisher_ = create_publisher<std_msgs::msg::String>(
@@ -166,7 +170,14 @@ private:
       operator_mode_.reset();
       return;
     }
-    if (message->data == "ARM_OFFBOARD" || message->data == "TRAJECTORY" ||
+    const bool fixed_diagnostic_mode =
+      message->data == "ARM_FIXED" || message->data == "FIXED";
+    if (fixed_diagnostic_mode && !allow_fixed_setpoint_diagnostic_) {
+      RCLCPP_WARN(get_logger(), "Rejected disabled fixed-setpoint diagnostic mode");
+      return;
+    }
+    if (message->data == "ARM_OFFBOARD" || message->data == "ARM_FIXED" ||
+      message->data == "TRAJECTORY" || message->data == "FIXED" ||
       message->data == "RETURN" || message->data == "HOLD" ||
       message->data == "LAND" || message->data == "RESET")
     {
@@ -360,8 +371,9 @@ private:
     {
       operator_land_latched_ = true;
     }
-    const bool operator_arm_allowed = operator_override &&
-      *operator_mode_ == "ARM_OFFBOARD" && operatorArmRequestAllowed(
+    const bool operator_arm_requested = operator_override &&
+      (*operator_mode_ == "ARM_OFFBOARD" || *operator_mode_ == "ARM_FIXED");
+    const bool operator_arm_allowed = operator_arm_requested && operatorArmRequestAllowed(
       have_operator_goal_, side_door_closed_, inputs.px4_ready,
       prearm_pose_valid, have_landed_status_, landed_, armed_, offboard_);
     if (!operator_override && decision.command_close_side_door) {
@@ -385,8 +397,7 @@ private:
       }
     } else if (operator_airborne && worst_navigation_age > hold_timeout_) {
       publishString(control_mode_publisher_, "HOLD");
-    } else if (operator_override && *operator_mode_ == "ARM_OFFBOARD" &&
-      !operator_arm_allowed)
+    } else if (operator_arm_requested && !operator_arm_allowed)
     {
       publishString(control_mode_publisher_, "DISABLED");
     } else if (operator_override) {
@@ -426,6 +437,24 @@ private:
         publishString(control_mode_publisher_, "ARM_OFFBOARD");
       } else {
         publishString(control_mode_publisher_, "DISABLED");
+      }
+      return;
+    }
+    if (*operator_mode_ == "ARM_FIXED") {
+      if (have_operator_goal_ && allow_fixed_setpoint_diagnostic_) {
+        publishFixedSetpoint(operator_goal_);
+        publishString(control_mode_publisher_, "ARM_FIXED");
+      } else {
+        publishString(control_mode_publisher_, "DISABLED");
+      }
+      return;
+    }
+    if (*operator_mode_ == "FIXED") {
+      if (have_operator_goal_ && allow_fixed_setpoint_diagnostic_) {
+        publishFixedSetpoint(operator_goal_);
+        publishString(control_mode_publisher_, "FIXED");
+      } else {
+        publishString(control_mode_publisher_, "HOLD");
       }
       return;
     }
@@ -555,6 +584,18 @@ private:
     goal_publisher_->publish(goal);
   }
 
+  void publishFixedSetpoint(const Vec3 & point)
+  {
+    geometry_msgs::msg::PoseStamped setpoint;
+    setpoint.header.stamp = now();
+    setpoint.header.frame_id = map_frame_;
+    setpoint.pose.position.x = point.x;
+    setpoint.pose.position.y = point.y;
+    setpoint.pose.position.z = point.z;
+    setpoint.pose.orientation.w = 1.0;
+    fixed_setpoint_publisher_->publish(setpoint);
+  }
+
   void publishVisualVelocity(bool target_recent)
   {
     geometry_msgs::msg::TwistStamped velocity;
@@ -581,6 +622,7 @@ private:
 
   std::string map_frame_;
   bool mission_autostart_{false};
+  bool allow_fixed_setpoint_diagnostic_{false};
   double takeoff_height_{1.8};
   double hold_timeout_{0.3};
   double planner_map_timeout_{0.6};
@@ -631,6 +673,7 @@ private:
   std::optional<rclcpp::Time> aligned_since_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr fixed_setpoint_publisher_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr control_mode_publisher_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr cargo_command_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr visual_velocity_publisher_;

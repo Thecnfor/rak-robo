@@ -283,7 +283,7 @@ PX4 controller parameters must change to meet the 0.05 m/s settling requirement?
 
 ### Answer
 
-Open. Bag analysis rules out a gross frame/origin error: PX4-derived navigation
+In progress. Bag analysis rules out a gross frame/origin error: PX4-derived navigation
 odometry tracked Isaac ground truth with roughly centimetre-scale mean error, and
 all EGO trajectories ended at the fixed target `(5.004, -0.222, 1.300)`. Run a
 fixed-setpoint step ladder with EGO updates frozen: supported idle, +0.10 m,
@@ -292,6 +292,20 @@ actuator saturation and EKF innovations. Tune/validate mass, inertia, rotor thru
 curve, hover thrust and PX4 MPC gains one variable group at a time. Exit only when
 XY error <=0.10 m, speed <=0.05 m/s and no motor saturation are maintained for
 10 simulated seconds.
+
+Fixed-setpoint rounds on 2026-07-22 isolated model mismatches before gain
+tuning. PX4's Iris control allocation used 0.15--0.245 m rotor arms while the
+assembled USD rotor centers are at `(±0.065,±0.065)` m; the Docker runtime now
+overrides `CA_ROTOR{0..3}_{PX,PY,KM}` with measured FRD geometry and the Pegasus
+thrust/rolling-moment ratio. Pegasus's nominally visual rotor animation also
+drove massive revolute rotor joints at 5/100 rad/s while the thrust model
+separately applied rolling moment, so the competition scene now disables that
+physical animation. The single-variable repeat showed that this cleanup reduces
+the initial joint disturbance but is not sufficient: near hover thrust the
+vehicle still tips/slides off the support, then the controller saturates. The
+current physical blocker is the narrow 0.05 m X contact footprint combined with
+PX4's 3 s takeoff ramp; redesign the static support as a non-jointed launch
+cradle and only then test `MPC_TKO_RAMP_T` or rate gains one group at a time.
 
 ## #11: How are EGO replans handed to an active trajectory continuously?
 
