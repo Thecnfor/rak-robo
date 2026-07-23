@@ -37,7 +37,7 @@ struct PrearmPoseSample
 struct PrearmPoseLimits
 {
   Vec3 expected_position;
-  double position_tolerance{0.02};
+  double position_tolerance{0.015};
   double max_speed{0.05};
   double max_tilt_radians{0.05235987755982989};
 };
@@ -110,6 +110,13 @@ bool operatorArmRequestAllowed(
   bool armed,
   bool offboard);
 
+bool prearmAttitudeAgreementAllowed(
+  double raw_roll_radians,
+  double raw_pitch_radians,
+  double estimated_roll_radians,
+  double estimated_pitch_radians,
+  double maximum_error_radians);
+
 bool px4DiscreteStateUsable(
   bool state_received,
   double continuous_transport_age_seconds,
@@ -154,6 +161,12 @@ bool shouldRequestGroundDisarm(
   double landed_duration_seconds,
   double landing_state_duration_seconds,
   double minimum_ground_delay_seconds);
+
+bool forceDisarmDiagnosticAllowed(
+  bool diagnostic_enabled,
+  ExecutorFlightState state,
+  bool armed,
+  bool auto_land);
 
 ExecutorRequestedMode reduceExecutorRequest(
   ExecutorRequestedMode current,
@@ -254,6 +267,20 @@ struct PositionControlSetpoint
 PositionControlSetpoint fixedDiagnosticControlSetpoint(
   const TrajectoryState & state_ned,
   bool vertical_only);
+
+bool verticalOnlyDiagnosticActive(
+  bool enabled,
+  bool currently_active,
+  bool inside_guided_region,
+  double current_clearance_m,
+  double release_clearance_m,
+  double reengage_clearance_m);
+
+bool verticalOnlyHandoffConfigurationSafe(
+  double release_clearance_m,
+  double reengage_clearance_m,
+  double physical_guide_height_m,
+  double minimum_handoff_lead_m);
 
 class UniformBsplineTrajectory
 {

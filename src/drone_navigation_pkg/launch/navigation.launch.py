@@ -17,11 +17,13 @@ def generate_launch_description():
     )
     fixed_diagnostic = LaunchConfiguration('allow_fixed_setpoint_diagnostic')
     fixed_vertical_only = LaunchConfiguration('fixed_vertical_only_diagnostic')
+    force_disarm_diagnostic = LaunchConfiguration('allow_force_disarm_diagnostic')
     common = {
         'parameters': [
             str(config),
             {'allow_fixed_setpoint_diagnostic': fixed_diagnostic},
             {'fixed_vertical_only_diagnostic': fixed_vertical_only},
+            {'allow_force_disarm_diagnostic': force_disarm_diagnostic},
         ],
         'output': 'screen',
     }
@@ -32,6 +34,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'fixed_vertical_only_diagnostic',
+            default_value='false',
+        ),
+        DeclareLaunchArgument(
+            'allow_force_disarm_diagnostic',
             default_value='false',
         ),
         Node(

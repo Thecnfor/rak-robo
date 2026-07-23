@@ -46,6 +46,19 @@ launcher 在 `env -i` 后显式透传上述两个开关。比赛默认均为 `1`
 后会自然脱离。`/cargo_bay/command=status` 应返回
 `payload_locked=True prearm_support=True` 及载荷相对位姿误差。
 
+PX4 外部仿真必须按以下顺序初始化，不能让 EKF 在侧舱门关闭瞬态中建立姿态原点：
+
+1. `docker compose down` 停止 PX4，再加载并播放 Isaac 场景。
+2. 依次向 `/cargo_bay/command` 发布 `left_close`、`bottom_close`。
+3. 确认 `/drone0/state/pose` 连续 3 s 处于
+   `(4.55,-0.38,1.13)±0.015 m`、速度 `<0.05 m/s`、横滚/俯仰 `<0.5°`。
+4. 最后启动 PX4 Docker，等 `/fmu/out/vehicle_status_v1` 报告预检通过。
+
+2026-07-23 的对照试验证明，场景默认 `left_open()` 后立即启动 PX4 会把关门瞬态带入
+EKF；按上述顺序启动后，Isaac/PX4 横滚和俯仰差缩小到约 `0.03°`。
+`0.015 m` 位置门限与导轨单侧间隙一致；触地点落在导轨角部时即使旧的 `0.02 m`
+门限会通过，也必须重载场景重新居中，不能直接进行下一轮增推。
+
 不要同时运行 systemd 的 GUI Isaac 和上述独立 launcher。若 GUI 服务正在使用，应在
 Kit Script Editor 执行：
 
@@ -177,8 +190,9 @@ X1 的 `/tf` frame 名称全部显示出来，不代表无人机模型或 TF 树
 5. 视觉：粗搜索位、稳定 0.8 s、水平速度 <0.05 m/s、开底舱。
 6. 完整任务：关侧门→起飞→避障→对准→投放→返航→降落。
 
-实测 RTX 负载下 PX4 odometry wall-time 间隔 p99 为 0.38 s，因此当前超过 0.60 s 进入
-HOLD，超过 1.20 s 或 PX4 failsafe 请求 Land。轨迹进度和试飞阶段超时使用 `/clock`；
+实测 RTX 负载下 PX4 odometry wall-time 间隔 p99 为 0.38 s；2026-07-23 的飞行录包
+另捕获一次 1.372 s 尾延迟。因此当前超过 0.60 s 进入 HOLD，超过 1.50 s 或 PX4
+failsafe 请求 Land。轨迹进度和试飞阶段超时使用 `/clock`；
 传输失联保护使用 steady wall time。
 
 `LAND`/`ABORT` 会锁存终端降落状态；`CLEAR` 只清除普通操作意图，不解除该安全锁。
@@ -225,8 +239,10 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
 ```
 
 探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
-里程计仍为 1.5 s；固定阶梯若水平偏移 >0.20 m、低于 home >0.10 m、速度 >0.5 m/s
-或倾角 >20°，会先尝试返回落区再 LAND。验收 HOLD 期间任一采样若 XY 误差 >0.10 m、
+里程计仍为 1.5 s。executor 明确报告 `fixed_vertical_active=false` 前，固定阶梯水平
+偏移超过 `0.05 m` 会直接 LAND；完整 XY 控制接管后水平门限恢复为 `0.20 m`，此时
+才允许先返回落区再 LAND。低于 home >0.10 m、速度 >0.5 m/s 或倾角 >20°同样判定
+异常。验收 HOLD 期间任一采样若 XY 误差 >0.10 m、
 高度误差 >0.05 m、速度 >0.05 m/s 或归一化电机输出达到 0.95，整轮判失败；解除锁定
 若现场另行开放只读 `/fmu/out/actuator_motors` 并设置
 `require_live_actuator_feedback=true`，HOLD 中反馈超过 0.30 s 未更新同样失败。当前 PX4
@@ -234,15 +250,35 @@ v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和
 探针不会把飞行标记为验收成功。解除锁定后仍用最终实测触地点复核落区。中断或降落
 确认延迟时，进程持续发布安全
 意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。横向限位托架模式必须同时
-启用 `fixed_vertical_only_diagnostic`：首飞只锁高度，XY 使用零速度，yaw 留空，避免
-机体尚受限时由估计漂移积累位置/航向控制量；`cradle_touchdown` 会在 LAND 前先用同一
-模式垂直回到支撑面。
+启用 `fixed_vertical_only_diagnostic`：首飞只锁高度，XY 使用零加速度，航向角留空并
+命令零偏航速率，避免机体尚受限时由估计漂移积累位置/航向控制量。当前物理导轨顶部
+为 `+0.05 m`，executor 必须在 `+0.04 m` 接管完整 XY/航向控制，并校验至少保留
+`5 mm` 交接提前量；不满足该配置约束时节点拒绝启动。接管时捕获 PX4 当前估计航向，
+避免航向设定点阶跃。探针默认在偏航率超过
+0.5 rad/s 时直接请求 PX4 Land；`cradle_touchdown` 会在 LAND 前先用同一模式垂直
+回到支撑面。
 
 2026-07-22 的 +0.10 m 票据已通过：最高离架 0.1171 m、HOLD 最大速度 0.0381 m/s、
 触地点距验证中心 0.01243 m，四电机 ULog 峰值为 0.5345--0.5364，0 个采样达到
 0.95 饱和门限，5 个 PX4 命令 ACK 全部成功。证据见
 `docs/project/drone_cradle_takeoff_evidence_2026-07-22.json`。这只解除托架内 +0.10 m
 首飞票据，不替代 +0.20 m/10 s HOLD、自由飞行或完整比赛流程验收。
+
+2026-07-23 的短导轨交接修复也已实飞通过：XY 在 PX4/raw 离架
+`0.0403/0.0442 m` 时接管，水平位移仅 `0.0073 m`；5 秒 HOLD 最大水平误差
+`0.0215 m`、高度误差 `0.0222 m`、速度 `0.018 m/s`，返架后触地点距验证中心
+`0.0173 m`。ULog 四电机峰值为 `0.5006--0.5132`，没有饱和、failsafe 或 EKF
+故障。证据见
+`docs/project/drone_low_guide_handoff_evidence_2026-07-23.json`。下一阶段才允许提高到
+`+0.20 m/10 s`，不得直接跳到 1.8 m。
+
+同日的首次 `+0.20 m` 试验因俯仰振荡在 `20.4°/0.219 m/s` 触发安全中止；飞机在
+桌面完成 Land 和 disarm。ULog 显示俯仰设定最大约 `5.9°`、实际达到 `21.6°`，且无
+电机饱和，因此当前开放问题是姿态/角速度动态或仿真惯量匹配。随后临时把
+`MC_ROLLRATE_K/MC_PITCHRATE_K` 从 `1.0` 降到 `0.5` 的对照试验会在交接前横滑，
+最终滑出台面，已经判定不安全并从 Docker Compose 回退。禁止复用 `K=0.5`；再次通电
+前必须重载场景扶正无人机，先核对 PhysX 质量/惯量与 PX4 模型，再保持 rate K=1.0
+逐项验证外环姿态参数。当前不得继续增高。
 
 现场的拒绝/通过对照数据见
 `docs/project/prearm_pose_gate_evidence_2026-07-22.json`。

@@ -26,6 +26,8 @@ using drone_navigation::executorSafetyAction;
 using drone_navigation::boolTokenValue;
 using drone_navigation::fixedDiagnosticControlSetpoint;
 using drone_navigation::fixedSetpointReady;
+using drone_navigation::verticalOnlyDiagnosticActive;
+using drone_navigation::verticalOnlyHandoffConfigurationSafe;
 
 namespace
 {
@@ -255,19 +257,40 @@ TEST(ExecutorFixedDiagnostic, VerticalOnlyAvoidsConstrainedPositionAndYawWindup)
   EXPECT_TRUE(std::isnan(vertical.position[0]));
   EXPECT_TRUE(std::isnan(vertical.position[1]));
   EXPECT_DOUBLE_EQ(vertical.position[2], -0.10);
-  EXPECT_DOUBLE_EQ(vertical.velocity[0], 0.0);
-  EXPECT_DOUBLE_EQ(vertical.velocity[1], 0.0);
+  EXPECT_TRUE(std::isnan(vertical.velocity[0]));
+  EXPECT_TRUE(std::isnan(vertical.velocity[1]));
   EXPECT_DOUBLE_EQ(vertical.velocity[2], -0.01);
-  EXPECT_TRUE(std::isnan(vertical.acceleration[0]));
-  EXPECT_TRUE(std::isnan(vertical.acceleration[1]));
+  EXPECT_DOUBLE_EQ(vertical.acceleration[0], 0.0);
+  EXPECT_DOUBLE_EQ(vertical.acceleration[1], 0.0);
   EXPECT_DOUBLE_EQ(vertical.acceleration[2], -0.02);
   EXPECT_TRUE(std::isnan(vertical.yaw));
-  EXPECT_TRUE(std::isnan(vertical.yawspeed));
+  EXPECT_DOUBLE_EQ(vertical.yawspeed, 0.0);
 
   const auto full = fixedDiagnosticControlSetpoint(state, false);
   EXPECT_DOUBLE_EQ(full.position[0], 1.0);
   EXPECT_DOUBLE_EQ(full.position[1], 2.0);
   EXPECT_DOUBLE_EQ(full.yaw, 1.2);
+}
+
+TEST(ExecutorFixedDiagnostic, HandsPositionControlOverOnlyAboveGuideWithHysteresis)
+{
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(false, true, true, 0.0, 0.17, 0.16));
+  EXPECT_TRUE(verticalOnlyDiagnosticActive(true, true, false, 0.0, 0.17, 0.16));
+  EXPECT_TRUE(verticalOnlyDiagnosticActive(true, true, true, 0.16, 0.17, 0.16));
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(true, true, true, 0.17, 0.17, 0.16));
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(true, true, false, 0.17, 0.17, 0.16));
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(true, false, true, 0.165, 0.17, 0.16));
+  EXPECT_TRUE(verticalOnlyDiagnosticActive(true, false, true, 0.16, 0.17, 0.16));
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(true, false, false, 0.16, 0.17, 0.16));
+  EXPECT_TRUE(verticalOnlyDiagnosticActive(
+      true, false, true, std::numeric_limits<double>::quiet_NaN(), 0.17, 0.16));
+}
+
+TEST(ExecutorFixedDiagnostic, RequiresHorizontalControlBeforePhysicalGuideExit)
+{
+  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.04, 0.03, 0.05, 0.005));
+  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.08, 0.06, 0.05, 0.005));
+  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.05, 0.04, 0.05, 0.005));
 }
 
 TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)
@@ -312,6 +335,21 @@ TEST(ExecutorLanding, DisarmsOnlyAfterConfirmedGroundDelay)
     ExecutorFlightState::LAND_LATCHED, true, true, true, false, 3.0, 3.0, 2.0));
 }
 
+TEST(ExecutorLanding, ForceDisarmDiagnosticRequiresTerminalAutoLand)
+{
+  using drone_navigation::forceDisarmDiagnosticAllowed;
+  EXPECT_TRUE(forceDisarmDiagnosticAllowed(
+    true, ExecutorFlightState::LAND_LATCHED, true, true));
+  EXPECT_FALSE(forceDisarmDiagnosticAllowed(
+    false, ExecutorFlightState::LAND_LATCHED, true, true));
+  EXPECT_FALSE(forceDisarmDiagnosticAllowed(
+    true, ExecutorFlightState::ACTIVE, true, true));
+  EXPECT_FALSE(forceDisarmDiagnosticAllowed(
+    true, ExecutorFlightState::LAND_LATCHED, false, true));
+  EXPECT_FALSE(forceDisarmDiagnosticAllowed(
+    true, ExecutorFlightState::LAND_LATCHED, true, false));
+}
+
 TEST(OperatorArmGate, AllowsGroundArmAndAlreadyActiveOffboardTracking)
 {
   EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(
@@ -328,6 +366,19 @@ TEST(OperatorArmGate, AllowsGroundArmAndAlreadyActiveOffboardTracking)
     true, false, true, true, true, true, false, false));
   EXPECT_FALSE(drone_navigation::operatorArmRequestAllowed(
     false, true, true, true, true, true, false, false));
+}
+
+TEST(OperatorArmGate, RequiresPx4TiltAgreementWithSimulatorTruth)
+{
+  const double tolerance = 1.5 * kPi / 180.0;
+  EXPECT_TRUE(drone_navigation::prearmAttitudeAgreementAllowed(
+    0.0, 0.0, 1.4 * kPi / 180.0, -1.4 * kPi / 180.0, tolerance));
+  EXPECT_FALSE(drone_navigation::prearmAttitudeAgreementAllowed(
+    0.0, 0.0, 1.6 * kPi / 180.0, 0.0, tolerance));
+  EXPECT_TRUE(drone_navigation::prearmAttitudeAgreementAllowed(
+    kPi - 0.01, 0.0, -kPi + 0.01, 0.0, 0.03));
+  EXPECT_FALSE(drone_navigation::prearmAttitudeAgreementAllowed(
+    0.0, 0.0, 0.0, 0.0, -0.1));
 }
 
 TEST(PrearmPoseGate, RequiresCalibratedSpawnSpeedAndTiltEnvelope)

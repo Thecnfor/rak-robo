@@ -82,6 +82,27 @@ class HoverProbeCoreTest(unittest.TestCase):
             )
         )
 
+    def test_default_prearm_gate_rejects_touchdown_at_guide_clearance_edge(self):
+        limits = CORE.PrearmPoseLimits(
+            expected_position=(4.55, -0.38, 1.13)
+        )
+        centered_after_door_close = CORE.PrearmPoseSample(
+            position=(4.559775, -0.379631, 1.130005),
+            speed_mps=0.0,
+            roll_deg=0.0,
+            pitch_deg=0.0,
+        )
+        guide_corner_touchdown = CORE.PrearmPoseSample(
+            position=(4.559946, -0.365165, 1.13),
+            speed_mps=0.0,
+            roll_deg=0.0,
+            pitch_deg=0.0,
+        )
+        self.assertTrue(
+            CORE.prearm_pose_allowed(centered_after_door_close, limits)
+        )
+        self.assertFalse(CORE.prearm_pose_allowed(guide_corner_touchdown, limits))
+
     def test_static_support_can_replace_missed_discrete_land_sample(self):
         self.assertTrue(CORE.ground_observation_usable(True, False))
         self.assertTrue(CORE.ground_observation_usable(False, True))
@@ -98,12 +119,151 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.fixed_step_reached(0.04, 0.06, 0.04))
         self.assertFalse(CORE.fixed_step_reached(0.04, 0.03, 0.051))
 
+    def test_each_fixed_step_gets_a_fresh_timeout_origin(self):
+        self.assertEqual(
+            CORE.advance_fixed_step(0, 2, 12.5, 9_000_000_000),
+            (1, False, 12.5, 9_000_000_000),
+        )
+        self.assertEqual(
+            CORE.advance_fixed_step(1, 2, 14.0, 10_000_000_000),
+            (2, True, None, None),
+        )
+
     def test_fixed_step_envelope_rejects_drift_drop_speed_and_tilt(self):
         self.assertTrue(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.20, 8.0))
         self.assertFalse(CORE.fixed_step_envelope_safe(0.201, 0.02, 0.20, 8.0))
         self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.101, 0.20, 8.0))
         self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.51, 8.0))
         self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.20, 20.1))
+
+    def test_full_horizontal_control_requires_explicit_executor_handoff(self):
+        self.assertFalse(
+            CORE.full_horizontal_control_available(
+                "LIFECYCLE ACTIVE fixed_vertical_active=true"
+            )
+        )
+        self.assertTrue(
+            CORE.full_horizontal_control_available(
+                "FIXED_CONTROL vertical_only=false fixed_vertical_active=false"
+            )
+        )
+        self.assertFalse(CORE.full_horizontal_control_available("LIFECYCLE ACTIVE"))
+
+    def test_abort_return_requires_positive_airborne_clearance(self):
+        args = (True, False, True, True, True, True)
+        self.assertFalse(
+            CORE.abort_return_allowed(
+                *args, 1.025, 1.0, full_horizontal_control=True
+            )
+        )
+        self.assertTrue(
+            CORE.abort_return_allowed(
+                *args, 1.03, 1.0, full_horizontal_control=True
+            )
+        )
+        self.assertFalse(
+            CORE.abort_return_allowed(
+                *args, 1.20, 1.0, full_horizontal_control=False
+            )
+        )
+        self.assertFalse(
+            CORE.abort_return_allowed(
+                True, True, True, True, True, True, 1.2, 1.0
+            )
+        )
+        self.assertFalse(
+            CORE.abort_return_allowed(
+                True, False, False, True, True, True, 1.2, 1.0
+            )
+        )
+
+    def test_target_translation_preserves_displacement_between_origins(self):
+        raw_home = (4.5599, -0.3799, 1.1300)
+        nav_home = (4.5536, -0.3768, 1.1135)
+        raw_target = (4.5510, -0.3800, 1.2300)
+        nav_target = CORE.translate_target_between_origins(
+            raw_target, raw_home, nav_home
+        )
+        self.assertAlmostEqual(nav_target[0], 4.5447, places=4)
+        self.assertAlmostEqual(nav_target[1], -0.3769, places=4)
+        self.assertAlmostEqual(nav_target[2], 1.2135, places=4)
+        round_trip = CORE.translate_target_between_origins(
+            nav_target, nav_home, raw_home
+        )
+        for actual, expected in zip(round_trip, raw_target):
+            self.assertAlmostEqual(actual, expected)
+        with self.assertRaises(ValueError):
+            CORE.translate_target_between_origins(
+                (0.0, 0.0), nav_home, raw_home
+            )
+
+    def test_yaw_rate_envelope_rejects_nonfinite_and_excessive_rotation(self):
+        self.assertTrue(CORE.yaw_rate_envelope_safe(0.0, 1.0))
+        self.assertTrue(CORE.yaw_rate_envelope_safe(-1.0, 1.0))
+        self.assertFalse(CORE.yaw_rate_envelope_safe(1.001, 1.0))
+        self.assertFalse(CORE.yaw_rate_envelope_safe(float("nan"), 1.0))
+        self.assertFalse(CORE.yaw_rate_envelope_safe(0.1, 0.0))
+
+    def test_force_disarm_fallback_requires_stationary_flipped_crash(self):
+        args = dict(
+            enabled=True,
+            armed=True,
+            auto_land=True,
+            executor_lifecycle="LAND_LATCHED",
+            current_z=0.018,
+            spawn_z=1.13,
+            speed_mps=0.001,
+            roll_deg=179.0,
+            pitch_deg=2.0,
+            stationary_duration_s=1.0,
+        )
+        self.assertTrue(CORE.crashed_airframe_force_disarm_ready(**args))
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "enabled": False}
+            )
+        )
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "auto_land": False}
+            )
+        )
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "current_z": 1.0}
+            )
+        )
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "speed_mps": 0.051}
+            )
+        )
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "roll_deg": 10.0, "pitch_deg": 10.0}
+            )
+        )
+        self.assertFalse(
+            CORE.crashed_airframe_force_disarm_ready(
+                **{**args, "stationary_duration_s": 0.99}
+            )
+        )
+
+    def test_prearm_attitude_agreement_rejects_unconverged_px4_tilt(self):
+        self.assertTrue(
+            CORE.prearm_attitude_agreement_allowed(0.0, 0.0, 0.4, -0.4)
+        )
+        self.assertFalse(
+            CORE.prearm_attitude_agreement_allowed(0.0, 0.0, 0.6, 0.0)
+        )
+        self.assertTrue(
+            CORE.prearm_attitude_agreement_allowed(179.8, 0.0, -179.8, 0.0)
+        )
+        self.assertFalse(
+            CORE.prearm_attitude_agreement_allowed(
+                0.0, 0.0, float("nan"), 0.0
+            )
+        )
 
     def test_landing_region_is_valid_and_contains_only_safe_touchdown_area(self):
         region = CORE.LandingRegion(

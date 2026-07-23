@@ -247,17 +247,70 @@ PositionControlSetpoint fixedDiagnosticControlSetpoint(
     };
   }
 
-  // The launch cradle supplies the horizontal constraint during the first
-  // 0.10 m diagnostic step. Do not let local-position or heading estimator
+  // The launch cradle supplies the horizontal constraint before the handoff
+  // clearance. Do not let local-position or heading estimator
   // drift wind up the corresponding controllers while the vehicle is guided.
-  // Finite zero XY velocity keeps PX4's per-axis validity contract satisfied.
+  // Finite zero XY acceleration keeps PX4's per-axis validity contract
+  // satisfied without enabling the horizontal velocity PID integrator. A
+  // zero yaw-rate command avoids accumulating heading error while the guide
+  // mechanically prevents yaw; the executor captures the current heading at
+  // release for a bumpless handoff to attitude control.
   return {
     {nan, nan, state_ned.position.z},
-    {0.0, 0.0, state_ned.velocity.z},
-    {nan, nan, state_ned.acceleration.z},
+    {nan, nan, state_ned.velocity.z},
+    {0.0, 0.0, state_ned.acceleration.z},
     nan,
-    nan,
+    0.0,
   };
+}
+
+bool verticalOnlyDiagnosticActive(
+  bool enabled,
+  bool currently_active,
+  bool inside_guided_region,
+  double current_clearance_m,
+  double release_clearance_m,
+  double reengage_clearance_m)
+{
+  if (!enabled) {
+    return false;
+  }
+  if (!std::isfinite(current_clearance_m) ||
+    !std::isfinite(release_clearance_m) ||
+    !std::isfinite(reengage_clearance_m) ||
+    reengage_clearance_m < 0.0 ||
+    release_clearance_m <= reengage_clearance_m)
+  {
+    return true;
+  }
+  if (currently_active) {
+    // Once armed in the guide, horizontal drift is evidence of contact with a
+    // guide wall, not evidence that the aircraft has cleared the guide.  Keep
+    // horizontal position control disabled until vertical clearance is
+    // established.  Releasing on an XY-radius violation makes PX4 fight the
+    // static wall and winds up the roll/pitch rate integrators.
+    return current_clearance_m < release_clearance_m;
+  }
+  return inside_guided_region && current_clearance_m <= reengage_clearance_m;
+}
+
+bool verticalOnlyHandoffConfigurationSafe(
+  double release_clearance_m,
+  double reengage_clearance_m,
+  double physical_guide_height_m,
+  double minimum_handoff_lead_m)
+{
+  const bool finite =
+    std::isfinite(release_clearance_m) &&
+    std::isfinite(reengage_clearance_m) &&
+    std::isfinite(physical_guide_height_m) &&
+    std::isfinite(minimum_handoff_lead_m);
+  return finite &&
+         reengage_clearance_m >= 0.0 &&
+         release_clearance_m > reengage_clearance_m &&
+         physical_guide_height_m > 0.0 &&
+         minimum_handoff_lead_m >= 0.0 &&
+         release_clearance_m + minimum_handoff_lead_m <= physical_guide_height_m;
 }
 
 Vec3 operator-(const Vec3 & lhs, const Vec3 & rhs)
@@ -481,6 +534,25 @@ bool operatorArmRequestAllowed(
   return safe_ground_arm || active_offboard_tracking;
 }
 
+bool prearmAttitudeAgreementAllowed(
+  double raw_roll_radians,
+  double raw_pitch_radians,
+  double estimated_roll_radians,
+  double estimated_pitch_radians,
+  double maximum_error_radians)
+{
+  if (!std::isfinite(raw_roll_radians) || !std::isfinite(raw_pitch_radians) ||
+    !std::isfinite(estimated_roll_radians) || !std::isfinite(estimated_pitch_radians) ||
+    !std::isfinite(maximum_error_radians) || maximum_error_radians < 0.0)
+  {
+    return false;
+  }
+  const double roll_error = std::abs(
+    std::remainder(estimated_roll_radians - raw_roll_radians, 2.0 * kPi));
+  const double pitch_error = std::abs(estimated_pitch_radians - raw_pitch_radians);
+  return roll_error <= maximum_error_radians && pitch_error <= maximum_error_radians;
+}
+
 bool px4DiscreteStateUsable(
   bool state_received,
   double continuous_transport_age_seconds,
@@ -532,6 +604,16 @@ bool shouldRequestGroundDisarm(
          landed_after_latch &&
          landed_duration_seconds >= minimum_ground_delay_seconds &&
          landing_state_duration_seconds >= minimum_ground_delay_seconds;
+}
+
+bool forceDisarmDiagnosticAllowed(
+  bool diagnostic_enabled,
+  ExecutorFlightState state,
+  bool armed,
+  bool auto_land)
+{
+  return diagnostic_enabled && state == ExecutorFlightState::LAND_LATCHED &&
+         armed && auto_land;
 }
 
 ExecutorRequestedMode reduceExecutorRequest(

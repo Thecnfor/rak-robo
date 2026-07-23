@@ -301,8 +301,8 @@ thrust/rolling-moment ratio. Pegasus's nominally visual rotor animation also
 drove massive revolute rotor joints at 5/100 rad/s while the thrust model
 separately applied rolling moment, so the competition scene now disables that
 physical animation. The narrow contact footprint is now surrounded by a
-non-jointed launch cradle: two support pads plus four 0.15 m high low-friction
-lateral guides with 3 mm clearance. The first repeat exposed constrained-control
+non-jointed launch cradle: two support pads plus four 0.05 m high zero-friction
+lateral guides with 15 mm clearance. The first repeat exposed constrained-control
 windup, so the diagnostic executor now has an explicit vertical-only mode (Z
 position, zero XY velocity, yaw unset), and the probe can descend onto the
 support before requesting PX4 LAND. Normal EGO/trajectory setpoints do not use
@@ -319,6 +319,60 @@ velocity/position/height/heading innovation test ratios of
 [`drone_cradle_takeoff_evidence_2026-07-22.json`](drone_cradle_takeoff_evidence_2026-07-22.json).
 The cradle/+0.10 m milestone is resolved; ticket #10 remains open until the
 +0.20 m and 10 simulated-second free-hold criteria pass outside the guides.
+
+A 2026-07-23 regression with the shortened guide exposed a second handoff bug.
+With the side and bottom doors closed before PX4 startup, preflight attitude
+agreement was within 0.03 degrees and ULog showed balanced motor peaks
+0.549--0.560, no saturation, roll/pitch rate-integral maxima 0.0216/0.0089,
+and attitude below about 1.3 degrees. Nevertheless the executor kept
+`fixed_vertical_active=true` until +0.08 m while the physical guide ended at
++0.05 m. The airframe therefore accumulated 0.20 m of nearly level lateral
+motion without an XY position loop. The abort path then incorrectly attempted
+an XY return while XY control was still disabled. PX4 NAV_LAND completed safely
+on the table and disarmed, but outside the cradle.
+
+The repaired contract makes the guide height explicit, validates that the
+handoff is at least 5 mm below it, and now releases at +0.04 m for the +0.05 m
+guide. The probe treats `fixed_vertical_active=false` as the only evidence that
+XY recovery is available; before that token, 0.05 m lateral displacement causes
+an immediate LAND instead of `ABORT_RETURN`. Evidence for the failed regression
+is `bags/drone_low_guide_closed_first_010m_20260723`,
+`/tmp/drone_low_guide_closed_first_010m_20260723.json`, and PX4 ULog
+`docker/px4/ulog/2026-07-23/05_59_42.ulg`. Ticket #10 remains open until the
+corrected +0.10 m rerun and then +0.20 m/10 s free hold pass.
+
+The corrected +0.10 m rerun then passed. Full XY control released at PX4/raw
+clearances 0.0403/0.0442 m with only 0.0073 m horizontal displacement, and
+re-engaged during return at 0.0292/0.0295 m. The 5 s hold stayed within
+0.0215 m horizontal error, 0.0222 m altitude error and 0.018 m/s. The vehicle
+returned to the verified cradle rectangle, landed, disarmed and completed all
+five command ACKs. ULog motor maxima were 0.5006--0.5132 with no saturation,
+failsafe, estimator fault or failure-detector flag. Evidence is in
+[`drone_low_guide_handoff_evidence_2026-07-23.json`](drone_low_guide_handoff_evidence_2026-07-23.json).
+Ticket #10 now advances to the +0.20 m/10 s free-hold rerun; it remains open.
+
+The first +0.20 m attempt on 2026-07-23 did not pass. The +0.10 m step was
+stable, but the next step developed a pitch oscillation and the probe tripped
+its envelope at 20.4 degrees and 0.219 m/s. It selected `ABORT_RETURN` only
+after full XY handoff, then escalated to PX4 LAND when yaw rate exceeded the
+0.5 rad/s limit. The vehicle landed and disarmed on the table. ULog
+`docker/px4/ulog/2026-07-23/06_49_20.ulg` showed no motor saturation or PX4
+failsafe: commanded pitch stayed below 5.921 degrees while measured pitch
+reached 21.599 degrees and the pitch rate integral reached its 0.05 limit.
+This localizes the open issue to attitude/rate dynamics or the simulated
+airframe inertia rather than insufficient thrust.
+
+A single-variable follow-up temporarily reduced `MC_ROLLRATE_K` and
+`MC_PITCHRATE_K` from 1.0 to 0.5. It was rejected: before full XY handoff the
+airframe exceeded the guided 0.05 m horizontal envelope, LAND could not keep
+it on the table, and it fell to the floor. ULog
+`docker/px4/ulog/2026-07-23/07_08_32.ulg` recorded motor peaks up to 0.999,
+about 90 degrees roll and a failure-detector flag. PX4 was disarmed and
+stopped, and both temporary gain overrides were removed from Docker Compose.
+Do not repeat this gain setting. Before another powered test, reset the scene,
+measure the PhysX inertia tensor against the PX4 plant model, and investigate
+outer attitude gains while keeping the previously stable rate gain at 1.0.
+Ticket #10 remains open and no higher-altitude flight is authorized.
 
 The diagnostic probe now treats the 10 s HOLD criteria as hard per-sample gates,
 observes normalized motor output for saturation, and rechecks the measured

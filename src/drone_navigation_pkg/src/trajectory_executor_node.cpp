@@ -45,8 +45,20 @@ public:
       "ground_disarm_delay_seconds", 2.0);
     allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
       "allow_fixed_setpoint_diagnostic", false);
+    allow_force_disarm_diagnostic_ = declare_parameter<bool>(
+      "allow_force_disarm_diagnostic", false);
     fixed_vertical_only_diagnostic_ = declare_parameter<bool>(
       "fixed_vertical_only_diagnostic", false);
+    fixed_vertical_release_clearance_ = declare_parameter<double>(
+      "fixed_vertical_release_clearance", 0.04);
+    fixed_vertical_reengage_clearance_ = declare_parameter<double>(
+      "fixed_vertical_reengage_clearance", 0.03);
+    fixed_vertical_guide_height_ = declare_parameter<double>(
+      "fixed_vertical_guide_height", 0.05);
+    fixed_vertical_minimum_handoff_lead_ = declare_parameter<double>(
+      "fixed_vertical_minimum_handoff_lead", 0.005);
+    fixed_vertical_guide_radius_ = declare_parameter<double>(
+      "fixed_vertical_guide_radius", 0.02);
     fixed_setpoint_timeout_ = declare_parameter<double>(
       "fixed_setpoint_timeout", 0.6);
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
@@ -65,6 +77,19 @@ public:
       throw std::runtime_error(
               "fixed_vertical_only_diagnostic requires allow_fixed_setpoint_diagnostic");
     }
+    if (!verticalOnlyHandoffConfigurationSafe(
+        fixed_vertical_release_clearance_,
+        fixed_vertical_reengage_clearance_,
+        fixed_vertical_guide_height_,
+        fixed_vertical_minimum_handoff_lead_))
+    {
+      throw std::runtime_error(
+              "fixed vertical control must hand over before the physical guide exit");
+    }
+    if (fixed_vertical_guide_radius_ <= 0.0) {
+      throw std::runtime_error("fixed_vertical_guide_radius must be positive");
+    }
+    fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
     const auto origin = declare_parameter<std::vector<double>>(
       "px4_map_origin", {4.55, -0.38, 1.13});
     if (origin.size() != 3) {
@@ -158,10 +183,24 @@ private:
   void onMode(const std_msgs::msg::String::SharedPtr message)
   {
     const std::string requested = message->data;
+    if (requested == "FORCE_DISARM") {
+      if (!forceDisarmDiagnosticAllowed(
+          allow_force_disarm_diagnostic_, lifecycle_.state(), armed_, auto_land_))
+      {
+        publishState("REJECTED force_disarm_gate");
+        return;
+      }
+      force_disarm_requested_ = true;
+      last_control_intent_ = steadyNow();
+      publishState("FORCE_DISARM_ACCEPTED");
+      return;
+    }
     Mode new_mode = Mode::DISABLED;
     ExecutorRequestedMode new_request = ExecutorRequestedMode::DISABLED;
+    bool fixed_arm_request = false;
     if (requested == "ARM_OFFBOARD" || requested == "ARM_FIXED") {
       const bool fixed_request = requested == "ARM_FIXED";
+      fixed_arm_request = fixed_request;
       if (fixed_request && !allow_fixed_setpoint_diagnostic_) {
         publishState("REJECTED fixed_setpoint_diagnostic_disabled");
         return;
@@ -234,6 +273,10 @@ private:
       }
       if (new_request == ExecutorRequestedMode::ARM_TRAJECTORY) {
         prestream_started_ = steadyNow();
+        if (fixed_arm_request) {
+          fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
+          fixed_diagnostic_yaw_ = current_yaw_;
+        }
       }
       mode_ = new_mode;
       publishState("MODE " + requested);
@@ -242,6 +285,7 @@ private:
       have_trajectory_ = false;
       trajectory_started_ = false;
       have_fixed_setpoint_ = false;
+      fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
     }
     requested_mode_ = new_request;
   }
@@ -288,6 +332,12 @@ private:
       message->pose.pose.position.x,
       message->pose.pose.position.y,
       message->pose.pose.position.z};
+    const auto & orientation = message->pose.pose.orientation;
+    const double sin_yaw = 2.0 *
+      (orientation.w * orientation.z + orientation.x * orientation.y);
+    const double cos_yaw = 1.0 - 2.0 *
+      (orientation.y * orientation.y + orientation.z * orientation.z);
+    current_yaw_ = std::atan2(sin_yaw, cos_yaw);
     if (!have_odometry_) {
       hold_position_ = current_position_;
     }
@@ -415,6 +465,21 @@ private:
       last_disarm_command_ = steadyNow();
       publishState("GROUND_DISARM_COMMAND_SENT");
     }
+    if (!armed_) {
+      force_disarm_requested_ = false;
+    } else if (force_disarm_requested_ &&
+      forceDisarmDiagnosticAllowed(
+        allow_force_disarm_diagnostic_, decision.state, armed_, auto_land_) &&
+      ageOrInfinity(last_disarm_command_) >= 1.0)
+    {
+      // PX4 requires the force-disarm magic in param2 when its land detector
+      // has not recognized an already crashed, physically stationary vehicle.
+      publishVehicleCommand(
+        px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+        0.0F, 21196.0F);
+      last_disarm_command_ = steadyNow();
+      publishState("FORCE_DISARM_COMMAND_SENT");
+    }
     if (decision.request_loiter && ageOrInfinity(last_loiter_command_) >= 1.0) {
       // PX4 custom main mode AUTO=4, AUTO sub-mode LOITER=3.
       publishVehicleCommand(
@@ -455,8 +520,12 @@ private:
     publishState(
       "LIFECYCLE " + lifecycle + " fixed_setpoint_enabled=" +
       (allow_fixed_setpoint_diagnostic_ ? "true" : "false") +
+      " force_disarm_enabled=" +
+      (allow_force_disarm_diagnostic_ ? "true" : "false") +
       " fixed_vertical_only=" +
-      (fixed_vertical_only_diagnostic_ ? "true" : "false"));
+      (fixed_vertical_only_diagnostic_ ? "true" : "false") +
+      " fixed_vertical_active=" +
+      (fixed_vertical_only_active_ ? "true" : "false"));
   }
 
   void publishOffboardControlMode(bool velocity_control)
@@ -508,8 +577,38 @@ private:
       state_ned.velocity = enuToNed(state.velocity);
       state_ned.acceleration = enuToNed(state.acceleration);
       state_ned.yaw = yawEnuToNed(state.yaw);
-      const bool vertical_only_diagnostic = fixed_vertical_only_diagnostic_ &&
-        (mode_ == Mode::FIXED || mode_ == Mode::HOLD);
+      const bool vertical_capable_mode = mode_ == Mode::FIXED || mode_ == Mode::HOLD;
+      if (vertical_capable_mode) {
+        const bool previous_vertical_only = fixed_vertical_only_active_;
+        const double horizontal_from_origin = std::hypot(
+          current_position_.x - map_origin_.x,
+          current_position_.y - map_origin_.y);
+        fixed_vertical_only_active_ = verticalOnlyDiagnosticActive(
+          fixed_vertical_only_diagnostic_,
+          fixed_vertical_only_active_,
+          horizontal_from_origin <= fixed_vertical_guide_radius_,
+          current_position_.z - map_origin_.z,
+          fixed_vertical_release_clearance_,
+          fixed_vertical_reengage_clearance_);
+        if (previous_vertical_only && !fixed_vertical_only_active_) {
+          // The guide prevents real yaw motion but the estimator can drift.
+          // Capture the live estimate only when the guide is cleared so full
+          // heading control starts with zero error instead of releasing an
+          // accumulated yaw command.
+          fixed_diagnostic_yaw_ = current_yaw_;
+        }
+        if (fixed_vertical_only_active_ != previous_vertical_only) {
+          publishState(
+            std::string("FIXED_CONTROL vertical_only=") +
+            (fixed_vertical_only_active_ ? "true" : "false") +
+            " clearance=" + std::to_string(current_position_.z - map_origin_.z));
+        }
+      }
+      const bool vertical_only_diagnostic = vertical_capable_mode &&
+        fixed_vertical_only_active_;
+      if (fixed_vertical_only_diagnostic_ && vertical_capable_mode) {
+        state_ned.yaw = yawEnuToNed(fixed_diagnostic_yaw_);
+      }
       const auto control_setpoint = fixedDiagnosticControlSetpoint(
         state_ned,
         vertical_only_diagnostic);
@@ -594,8 +693,16 @@ private:
   double minimum_replan_execution_seconds_{1.0};
   double ground_disarm_delay_seconds_{2.0};
   double fixed_setpoint_timeout_{0.6};
+  double fixed_vertical_release_clearance_{0.04};
+  double fixed_vertical_reengage_clearance_{0.03};
+  double fixed_vertical_guide_height_{0.05};
+  double fixed_vertical_minimum_handoff_lead_{0.005};
+  double fixed_vertical_guide_radius_{0.02};
   bool allow_fixed_setpoint_diagnostic_{false};
+  bool allow_force_disarm_diagnostic_{false};
   bool fixed_vertical_only_diagnostic_{false};
+  bool fixed_vertical_only_active_{false};
+  bool force_disarm_requested_{false};
   Vec3 map_origin_;
   Mode mode_{Mode::DISABLED};
   ExecutorRequestedMode requested_mode_{ExecutorRequestedMode::DISABLED};
@@ -615,6 +722,8 @@ private:
   bool have_status_{false};
   bool failsafe_{false};
   Vec3 current_position_;
+  double current_yaw_{0.0};
+  double fixed_diagnostic_yaw_{0.0};
   Vec3 hold_position_;
   Vec3 visual_velocity_;
   Vec3 fixed_position_;

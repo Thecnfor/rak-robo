@@ -13,9 +13,10 @@
     max_acceleration: 0.6
     takeoff_height: 1.8
     # PX4 external-sim odometry is nominally 5 Hz but showed 0.38 s p99 wall
-    # gaps under RTX load. Keep HOLD above that jitter while LAND remains 1.2 s.
+    # gaps and one 1.372 s tail event under RTX capture load. Keep the early
+    # HOLD gate unchanged and allow only 128 ms margin before terminal LAND.
     odometry_hold_timeout: 0.60
-    data_land_timeout: 1.2
+    data_land_timeout: 1.5
     planner_map_timeout: 0.60
     fixed_setpoint_timeout: 0.60
     fixed_setpoint_topic: /drone/navigation/fixed_setpoint
@@ -27,9 +28,21 @@
     px4_command_ack_topic: /drone/navigation/px4_command_ack
     # Diagnostic-only direct position intent. Competition bringup keeps this off.
     allow_fixed_setpoint_diagnostic: false
+    # Explicit crash-recovery diagnostic. The executor additionally requires
+    # terminal AUTO_LAND before accepting FORCE_DISARM.
+    allow_force_disarm_diagnostic: false
     # First-lift diagnostic only: command Z position and zero XY velocity while
-    # the launch cradle supplies the lateral constraint. Normal missions stay off.
+    # the launch cradle supplies the lateral constraint. Inside the guide it
+    # commands zero yaw rate; full XY/yaw control captures the current heading
+    # at release and reverts before descending into the guide.
     fixed_vertical_only_diagnostic: false
+    # The physical lateral guide ends at +0.05 m. Enable PX4 XY control 1 cm
+    # before exit so there is no unconstrained horizontal-control dead band.
+    fixed_vertical_release_clearance: 0.04
+    fixed_vertical_reengage_clearance: 0.03
+    fixed_vertical_guide_height: 0.05
+    fixed_vertical_minimum_handoff_lead: 0.005
+    fixed_vertical_guide_radius: 0.02
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.
@@ -38,9 +51,13 @@
     px4_map_origin: [4.55, -0.38, 1.13]
     # Isaac world pose envelope required before any ground arm request.
     prearm_spawn_position: [4.55, -0.38, 1.13]
-    prearm_position_tolerance: 0.02
+    # Must stay inside the 15 mm lateral-guide clearance, not merely on its wall.
+    prearm_position_tolerance: 0.015
     prearm_max_speed: 0.05
     prearm_max_tilt_deg: 3.0
+    # Reject arm if PX4's estimated roll/pitch has not converged to the Isaac
+    # truth pose. This prevents rate-integrator windup against the launch cage.
+    prearm_attitude_tolerance_deg: 0.5
     mission_autostart: false
     drop_search_pose: [0.0, 0.0, 1.8]
     drop_min_height: 1.6

@@ -1,0 +1,83 @@
+{
+  "accepted": true,
+  "scope": "short-guide +0.10 m PX4 Offboard handoff, hold, cradle touchdown, disarm and reset",
+  "scene": {
+    "prearm_support_boxes": 6,
+    "lateral_guide_clearance_m": 0.015,
+    "lateral_guide_height_m": 0.05,
+    "guide_static_friction": 0.0,
+    "guide_dynamic_friction": 0.0,
+    "payload_joint_translation_error_m": 0.000001467,
+    "payload_joint_rotation_error_rad": 0.0
+  },
+  "startup": {
+    "sequence": "scene, close side and bottom doors, settle, start PX4",
+    "preflight_raw_roll_pitch_deg": [0.0, 0.0],
+    "preflight_px4_roll_pitch_deg": [-0.0332, -0.0712],
+    "preflight_attitude_tolerance_deg": 0.5,
+    "preflight_report": "/tmp/drone_handoff_preflight_20260723.json"
+  },
+  "control_handoff": {
+    "configured_release_clearance_m": 0.04,
+    "configured_reengage_clearance_m": 0.03,
+    "minimum_lead_below_guide_top_m": 0.005,
+    "release_px4_clearance_m": 0.040276,
+    "release_raw_clearance_m": 0.044201,
+    "release_raw_horizontal_displacement_m": 0.007273,
+    "reengage_px4_clearance_m": 0.029213,
+    "reengage_raw_clearance_m": 0.029486,
+    "reengage_raw_horizontal_displacement_m": 0.004519
+  },
+  "probe": {
+    "report_path": "/tmp/drone_low_guide_handoff_010m_20260723.json",
+    "report_success_before_ulog_review": false,
+    "report_pending_reason": "flight completed; PX4 ULog actuator saturation analysis required",
+    "completed_rounds": 1,
+    "fixed_step_passed_m": 0.1,
+    "hold_duration_sim_s": 5.0,
+    "hold_max_horizontal_error_m": 0.0215,
+    "hold_max_altitude_error_m": 0.0222,
+    "hold_max_speed_mps": 0.018,
+    "successful_px4_command_acks": 5,
+    "landed": true,
+    "disarmed": true,
+    "touchdown_position": [4.559945583343506, -0.3651653528213501, 1.1299999952316284],
+    "touchdown_distance_from_verified_center_m": 0.017323
+  },
+    "rosbag": {
+        "path": "bags/drone_low_guide_handoff_010m_20260723/drone_low_guide_handoff_010m_20260723_0.mcap",
+    "sha256": "566c0df601fb4fec8e995ae6a3b76cc44bffaa7981eaae2b928ecb9e49caf39b",
+    "messages": 113359,
+    "max_world_z_m": 1.2301630973815918,
+    "max_clearance_above_support_m": 0.1001584529876709
+  },
+  "px4_ulog": {
+    "path": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-23/06_25_38.ulg",
+    "sha256": "476cfbe4e5249d84d3e34e2ac6007d1aeb1ab75e1ea8e6ad230fd75ce4203b5a",
+    "armed_duration_sim_s": 38.292,
+    "motor_max_each": [0.5109949, 0.5031864, 0.5131512, 0.5006275],
+    "motor_saturation_threshold": 0.95,
+    "motor_saturation_samples": 0,
+    "max_abs_rate_integral": {
+      "roll": 0.0119711,
+      "pitch": 0.0123431,
+      "yaw": 0.00025225
+    },
+    "max_abs_attitude_deg": {
+      "roll": 1.1659,
+      "pitch": 0.9213
+    },
+    "failsafe_samples": 0,
+    "failure_detector_flags_or": 0,
+    "filter_fault_flags_or": 0,
+    "gps_check_fail_flags_or": 0,
+    "time_slip_abs_max": 0.0,
+    "max_innovation_test_ratios": {
+      "velocity": 0.0098499,
+      "position": 0.00373076,
+      "height": 0.002247,
+      "heading": 0.0192558
+    }
+  },
+  "acceptance_note": "The live probe intentionally left acceptance pending because actuator_motors is absent from DDS. Persisted ULog review closed the gate: all four motors remained below 0.514, with no saturation, estimator fault, failsafe or failure-detector flag."
+}

@@ -6,7 +6,7 @@
 
 from collections import deque
 from dataclasses import dataclass
-from math import asin, atan2, copysign, degrees, isfinite, sqrt
+from math import asin, atan2, copysign, degrees, isfinite, remainder, sqrt
 
 
 CONTINUOUS_FLIGHT_TOPICS = (
@@ -79,6 +79,11 @@ def parse_bool_token(text: str, key: str):
     return None
 
 
+def full_horizontal_control_available(executor_state: str) -> bool:
+    """Trust XY recovery only after the executor explicitly reports handoff."""
+    return parse_bool_token(executor_state, "fixed_vertical_active") is False
+
+
 def planner_map_ready(state: str, state_age_seconds: float, timeout: float) -> bool:
     """Require a fresh planner state that proves a transformed map update."""
     return (
@@ -100,6 +105,138 @@ def quaternion_roll_pitch_degrees(x: float, y: float, z: float, w: float):
         else asin(sin_pitch)
     )
     return degrees(roll), degrees(pitch)
+
+
+def crashed_airframe_force_disarm_ready(
+    enabled: bool,
+    armed: bool,
+    auto_land: bool,
+    executor_lifecycle: str,
+    current_z: float,
+    spawn_z: float,
+    speed_mps: float,
+    roll_deg: float,
+    pitch_deg: float,
+    stationary_duration_s: float,
+    minimum_drop_m: float = 0.25,
+    maximum_speed_mps: float = 0.05,
+    minimum_tilt_deg: float = 90.0,
+    minimum_stationary_seconds: float = 1.0,
+) -> bool:
+    """Recognize an unrecoverable, stationary crash after AUTO_LAND.
+
+    This is intentionally much stricter than ordinary landed detection.  It is
+    only an operator diagnostic fallback for the case where PX4 keeps motors
+    armed because a flipped vehicle was not classified as landed.
+    """
+    values = (
+        current_z,
+        spawn_z,
+        speed_mps,
+        roll_deg,
+        pitch_deg,
+        stationary_duration_s,
+    )
+    return (
+        enabled
+        and armed
+        and auto_land
+        and executor_lifecycle == "LAND_LATCHED"
+        and all(isfinite(value) for value in values)
+        and minimum_drop_m > 0.0
+        and maximum_speed_mps >= 0.0
+        and minimum_tilt_deg > 0.0
+        and minimum_stationary_seconds >= 0.0
+        and current_z <= spawn_z - minimum_drop_m
+        and speed_mps <= maximum_speed_mps
+        and max(abs(roll_deg), abs(pitch_deg)) >= minimum_tilt_deg
+        and stationary_duration_s >= minimum_stationary_seconds
+    )
+
+
+def prearm_attitude_agreement_allowed(
+    raw_roll_deg: float,
+    raw_pitch_deg: float,
+    estimated_roll_deg: float,
+    estimated_pitch_deg: float,
+    maximum_error_deg: float = 0.5,
+) -> bool:
+    """Require the PX4 tilt estimate to agree with simulator ground truth."""
+    values = (
+        raw_roll_deg,
+        raw_pitch_deg,
+        estimated_roll_deg,
+        estimated_pitch_deg,
+        maximum_error_deg,
+    )
+    if not all(isfinite(value) for value in values) or maximum_error_deg < 0.0:
+        return False
+    roll_error = abs(remainder(estimated_roll_deg - raw_roll_deg, 360.0))
+    pitch_error = abs(estimated_pitch_deg - raw_pitch_deg)
+    return roll_error <= maximum_error_deg and pitch_error <= maximum_error_deg
+
+
+def abort_return_allowed(
+    fixed_setpoint_diagnostic: bool,
+    emergency: bool,
+    armed: bool,
+    offboard: bool,
+    has_home: bool,
+    has_raw_position: bool,
+    current_z: float,
+    home_z: float,
+    full_horizontal_control: bool = False,
+    minimum_airborne_clearance_m: float = 0.03,
+) -> bool:
+    """Allow XY return only when airborne with horizontal control available.
+
+    Keeping a climb setpoint active while the aircraft still touches its guide
+    lets the vertical controller build thrust after an abort. Likewise, a
+    vertical-only setpoint cannot arrest horizontal drift after leaving the
+    guide. In either case the probe must request LAND immediately; only an
+    airborne aircraft with full XY control may return to the landing region.
+    """
+    return (
+        fixed_setpoint_diagnostic
+        and not emergency
+        and armed
+        and offboard
+        and has_home
+        and has_raw_position
+        and full_horizontal_control
+        and isfinite(current_z)
+        and isfinite(home_z)
+        and isfinite(minimum_airborne_clearance_m)
+        and minimum_airborne_clearance_m >= 0.0
+        and current_z - home_z >= minimum_airborne_clearance_m
+    )
+
+
+def translate_target_between_origins(
+    target: tuple,
+    source_origin: tuple,
+    destination_origin: tuple,
+) -> tuple:
+    """Translate one map-aligned target between two measured origins.
+
+    PX4 local position and Isaac ground truth share ENU axes but can have a
+    small estimator-origin offset.  Commands belong in the PX4-adapted map;
+    acceptance limits belong in Isaac ground truth.  Keeping this translation
+    explicit prevents that offset from becoming a false altitude or landing
+    error.
+    """
+    if not all(
+        len(value) == 3
+        for value in (target, source_origin, destination_origin)
+    ):
+        raise ValueError("target translation requires three 3D vectors")
+    values = (*target, *source_origin, *destination_origin)
+    if not all(isfinite(value) for value in values):
+        raise ValueError("target translation requires finite vectors")
+    return tuple(
+        destination_origin[index] + target[index] - source_origin[index]
+        for index in range(3)
+    )
 
 
 class RateWindow:
@@ -159,7 +296,7 @@ class PrearmPoseSample:
 @dataclass(frozen=True)
 class PrearmPoseLimits:
     expected_position: tuple
-    position_tolerance_m: float = 0.02
+    position_tolerance_m: float = 0.015
     max_speed_mps: float = 0.05
     max_tilt_deg: float = 3.0
 
@@ -290,6 +427,20 @@ def fixed_step_reached(
     )
 
 
+def advance_fixed_step(
+    current_index: int,
+    total_steps: int,
+    now_wall_seconds: float,
+    now_sim_nanoseconds,
+):
+    """Advance the ladder and give every remaining step a fresh deadline."""
+    next_index = current_index + 1
+    complete = next_index >= total_steps
+    if complete:
+        return next_index, True, None, None
+    return next_index, False, now_wall_seconds, now_sim_nanoseconds
+
+
 def fixed_step_envelope_safe(
     horizontal_displacement_m: float,
     drop_below_home_m: float,
@@ -306,6 +457,16 @@ def fixed_step_envelope_safe(
         and 0.0 <= drop_below_home_m <= max_drop_below_home_m
         and 0.0 <= speed_mps <= max_speed_mps
         and 0.0 <= max_tilt_deg_seen <= max_tilt_deg
+    )
+
+
+def yaw_rate_envelope_safe(yaw_rate_rad_s: float, max_yaw_rate_rad_s: float) -> bool:
+    """Reject an uncontrolled spin before attempting any lateral recovery."""
+    return (
+        isfinite(yaw_rate_rad_s)
+        and isfinite(max_yaw_rate_rad_s)
+        and max_yaw_rate_rad_s > 0.0
+        and abs(yaw_rate_rad_s) <= max_yaw_rate_rad_s
     )
 class StabilityWindow:
     def __init__(self, horizon_seconds: float = 4.0):

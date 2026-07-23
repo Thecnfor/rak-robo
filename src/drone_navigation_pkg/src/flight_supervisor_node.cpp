@@ -40,13 +40,22 @@ public:
     mission_autostart_ = declare_parameter<bool>("mission_autostart", false);
     allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
       "allow_fixed_setpoint_diagnostic", false);
+    allow_force_disarm_diagnostic_ = declare_parameter<bool>(
+      "allow_force_disarm_diagnostic", false);
     takeoff_height_ = declare_parameter<double>("takeoff_height", 1.8);
     hold_timeout_ = declare_parameter<double>("odometry_hold_timeout", 0.3);
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
     planner_map_timeout_ = declare_parameter<double>("planner_map_timeout", 0.6);
+    const double prearm_attitude_tolerance_degrees = declare_parameter<double>(
+      "prearm_attitude_tolerance_deg", 0.5);
     if (planner_map_timeout_ <= 0.0) {
       throw std::runtime_error("planner_map_timeout must be positive");
     }
+    if (prearm_attitude_tolerance_degrees < 0.0) {
+      throw std::runtime_error("prearm attitude tolerance must be non-negative");
+    }
+    prearm_attitude_tolerance_radians_ =
+      prearm_attitude_tolerance_degrees * kPi / 180.0;
     pose_tolerance_ = declare_parameter<double>("pose_tolerance", 0.20);
     visual_offset_threshold_ = declare_parameter<double>("visual_offset_threshold", 0.04);
     visual_alignment_seconds_ = declare_parameter<double>("visual_alignment_seconds", 0.8);
@@ -62,7 +71,7 @@ public:
     prearm_limits_.expected_position = {
       prearm_spawn[0], prearm_spawn[1], prearm_spawn[2]};
     prearm_limits_.position_tolerance = declare_parameter<double>(
-      "prearm_position_tolerance", 0.02);
+      "prearm_position_tolerance", 0.015);
     prearm_limits_.max_speed = declare_parameter<double>("prearm_max_speed", 0.05);
     prearm_limits_.max_tilt_radians = declare_parameter<double>(
       "prearm_max_tilt_deg", 3.0) * kPi / 180.0;
@@ -178,10 +187,15 @@ private:
       RCLCPP_WARN(get_logger(), "Rejected disabled fixed-setpoint diagnostic mode");
       return;
     }
+    if (message->data == "FORCE_DISARM" && !allow_force_disarm_diagnostic_) {
+      RCLCPP_WARN(get_logger(), "Rejected disabled force-disarm diagnostic mode");
+      return;
+    }
     if (message->data == "ARM_OFFBOARD" || message->data == "ARM_FIXED" ||
       message->data == "TRAJECTORY" || message->data == "FIXED" ||
       message->data == "RETURN" || message->data == "HOLD" ||
-      message->data == "LAND" || message->data == "RESET")
+      message->data == "LAND" || message->data == "RESET" ||
+      message->data == "FORCE_DISARM")
     {
       operator_mode_ = message->data;
       if (message->data == "LAND") {
@@ -224,6 +238,23 @@ private:
       message->twist.twist.linear.x,
       message->twist.twist.linear.y,
       message->twist.twist.linear.z};
+    const auto & orientation = message->pose.pose.orientation;
+    const double orientation_norm_squared =
+      orientation.x * orientation.x + orientation.y * orientation.y +
+      orientation.z * orientation.z + orientation.w * orientation.w;
+    have_estimated_attitude_ = std::isfinite(orientation_norm_squared) &&
+      std::abs(orientation_norm_squared - 1.0) <= 0.01;
+    if (have_estimated_attitude_) {
+      const double sin_roll = 2.0 *
+        (orientation.w * orientation.x + orientation.y * orientation.z);
+      const double cos_roll = 1.0 - 2.0 *
+        (orientation.x * orientation.x + orientation.y * orientation.y);
+      estimated_roll_radians_ = std::atan2(sin_roll, cos_roll);
+      const double sin_pitch = std::clamp(
+        2.0 * (orientation.w * orientation.y - orientation.z * orientation.x),
+        -1.0, 1.0);
+      estimated_pitch_radians_ = std::asin(sin_pitch);
+    }
     last_odometry_time_ = steadyNow();
     if (!have_home_ && !armed_) {
       home_ = current_position_;
@@ -336,7 +367,11 @@ private:
     const bool prearm_pose_valid = have_raw_pose_ && have_raw_twist_ &&
       ageOrInfinity(last_raw_pose_time_) <= hold_timeout_ &&
       ageOrInfinity(last_raw_twist_time_) <= hold_timeout_ &&
-      prearmPoseAllowed(prearm_sample_, prearm_limits_);
+      prearmPoseAllowed(prearm_sample_, prearm_limits_) &&
+      have_estimated_attitude_ && prearmAttitudeAgreementAllowed(
+        prearm_sample_.roll_radians, prearm_sample_.pitch_radians,
+        estimated_roll_radians_, estimated_pitch_radians_,
+        prearm_attitude_tolerance_radians_);
     const bool planner_map_ready = freshPlannerMapReady(
       have_planner_state_, planner_map_ready_,
       ageOrInfinity(last_planner_state_time_), planner_map_timeout_);
@@ -426,6 +461,11 @@ private:
     }
     state.data += std::string(" prearm_pose_valid=") +
       (prearm_pose_valid ? "true" : "false");
+    state.data += std::string(" prearm_attitude_agreement=") +
+      (have_raw_pose_ && have_estimated_attitude_ && prearmAttitudeAgreementAllowed(
+        prearm_sample_.roll_radians, prearm_sample_.pitch_radians,
+        estimated_roll_radians_, estimated_pitch_radians_,
+        prearm_attitude_tolerance_radians_) ? "true" : "false");
     state.data += std::string(" planner_map_ready=") +
       (planner_map_ready ? "true" : "false");
     state_publisher_->publish(state);
@@ -625,9 +665,11 @@ private:
   std::string map_frame_;
   bool mission_autostart_{false};
   bool allow_fixed_setpoint_diagnostic_{false};
+  bool allow_force_disarm_diagnostic_{false};
   double takeoff_height_{1.8};
   double hold_timeout_{0.3};
   double planner_map_timeout_{0.6};
+  double prearm_attitude_tolerance_radians_{0.5 * kPi / 180.0};
   double land_timeout_{1.0};
   double pose_tolerance_{0.2};
   double visual_offset_threshold_{0.04};
@@ -660,12 +702,15 @@ private:
   bool have_home_{false};
   bool have_raw_pose_{false};
   bool have_raw_twist_{false};
+  bool have_estimated_attitude_{false};
   bool target_visible_{false};
   bool payload_released_{false};
   bool have_operator_goal_{false};
   bool operator_land_latched_{false};
   double target_nx_{0.0};
   double target_ny_{0.0};
+  double estimated_roll_radians_{0.0};
+  double estimated_pitch_radians_{0.0};
   SteadyTime last_odometry_time_{};
   SteadyTime last_planner_state_time_{};
   SteadyTime last_raw_pose_time_{};
