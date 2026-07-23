@@ -296,7 +296,7 @@ class PrearmPoseSample:
 @dataclass(frozen=True)
 class PrearmPoseLimits:
     expected_position: tuple
-    position_tolerance_m: float = 0.015
+    position_tolerance_m: float = 0.004
     max_speed_mps: float = 0.05
     max_tilt_deg: float = 3.0
 
@@ -424,6 +424,27 @@ def fixed_step_reached(
         0.0 <= horizontal_error_m <= horizontal_tolerance_m
         and 0.0 <= altitude_error_m <= altitude_tolerance_m
         and 0.0 <= speed_mps <= max_speed_mps
+    )
+
+
+def guided_touchdown_reached(
+    horizontal_error_m: float,
+    altitude_error_m: float,
+    speed_mps: float,
+    guide_radius_m: float = 0.004,
+    altitude_tolerance_m: float = 0.05,
+    max_speed_mps: float = 0.05,
+) -> bool:
+    """Require the body to be centered inside the launch guide before LAND."""
+    if not 0.0 < guide_radius_m <= 0.004:
+        return False
+    return fixed_step_reached(
+        horizontal_error_m,
+        altitude_error_m,
+        speed_mps,
+        horizontal_tolerance_m=guide_radius_m,
+        altitude_tolerance_m=altitude_tolerance_m,
+        max_speed_mps=max_speed_mps,
     )
 
 

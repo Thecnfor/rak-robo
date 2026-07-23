@@ -1,0 +1,107 @@
+{
+  "date": "2026-07-23",
+  "ticket": 10,
+  "status": "open",
+  "authorization": {
+    "next_powered_test": "+0.10 m / 5 s HOLD only",
+    "plus_0_20_m_authorized": false,
+    "requires_before_power": [
+      "verify 5 +/- 1 mm clearance from body_collision to all four guide walls",
+      "prove body_collision-to-guide contact with a PhysX contact report or low-speed horizontal push"
+    ]
+  },
+  "airframe_model": {
+    "aggregate_mass_kg": 1.215,
+    "aggregate_inertia_diagonal_kg_m2": [
+      0.01589684,
+      0.01585909,
+      0.01383942
+    ],
+    "px4_overrides": {
+      "MC_PITCH_P": 4.0,
+      "MC_ROLLRATE_K": 1.0,
+      "MC_PITCHRATE_K": 1.0
+    }
+  },
+  "executor_handoff": {
+    "guide_height_m": 0.05,
+    "guide_single_side_clearance_m": 0.005,
+    "guide_software_radius_m": 0.004,
+    "release_clearance_m": 0.03,
+    "reengage_clearance_m": 0.02,
+    "pre_handoff_horizontal_abort_m": 0.012,
+    "prearm_position_tolerance_m": 0.004
+  },
+  "powered_runs": [
+    {
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-23/16_07_53.ulg",
+      "sha256": "888517a767ca6fc90928f620bc6a325fa7cc72cecd0a3b9f87d19b8cd58bb093",
+      "result": "safe_land_disarm",
+      "maximum_px4_rise_m": 0.041828,
+      "maximum_horizontal_displacement_m": 0.021872,
+      "actual_max_abs_pitch_deg": 1.6596,
+      "actual_max_abs_roll_deg": 0.3053,
+      "maximum_motor_output": 0.55688,
+      "motor_saturation_samples": 0
+    },
+    {
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-23/16_34_24.ulg",
+      "sha256": "e11587dfe92fc7831ba4dfb2441b434918f586a645d2a2c0d6a39ad181e5f3b4",
+      "result": "safe_land_disarm",
+      "maximum_px4_rise_m": 0.035797,
+      "maximum_horizontal_displacement_m": 0.024042,
+      "maximum_motor_output": 0.503,
+      "motor_saturation_samples": 0
+    },
+    {
+      "ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-23/16_47_11.ulg",
+      "sha256": "237094c85da41a23641fe27b2425e647a8552ed9e7926b19450464923c169253",
+      "result": "safe_land_disarm",
+      "maximum_px4_rise_m": 0.028198,
+      "maximum_horizontal_displacement_m": 0.0129,
+      "actual_max_abs_pitch_deg": 0.8158,
+      "actual_max_abs_roll_deg": 1.16,
+      "maximum_motor_output": 0.520325,
+      "motor_saturation_samples": 0
+    }
+  ],
+  "root_cause": {
+    "old_guide_envelope": "transparent_cargo_bay visual Xform",
+    "old_envelope_has_collision_api": false,
+    "actual_collision_prim": "/World/quadrotor/body/body_collision",
+    "old_actual_single_side_clearance_m": [
+      0.015,
+      0.0175
+    ],
+    "explanation": "The 0.012 m abort gate fired before the true rigid-body collision could touch a guide."
+  },
+  "implemented_unpowered_fix": {
+    "guide_envelope": "/World/quadrotor/body/body_collision",
+    "single_side_clearance_m": 0.005,
+    "left_cargo_door_closed_before_px4_start": true,
+    "offline_geometry_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "filtered_from_guides": [
+      "/World/quadrotor/mounted_cargo_bay/transparent_cargo_bay/cargo_body",
+      "/World/quadrotor/mounted_cargo_bay/transparent_cargo_bay/left_door",
+      "/World/quadrotor/mounted_cargo_bay/transparent_cargo_bay/bottom_door",
+      "/World/layout/caughting/SM_Pencil_White3_129",
+      "all rotor bodies and colliders"
+    ],
+    "unpowered_scene_initialization": {
+      "status": "passed",
+      "duration_s": 10,
+      "pose_samples": 136,
+      "maximum_position_drift_m": 1.22723266e-7,
+      "maximum_abs_roll_deg": 0.0,
+      "maximum_abs_pitch_deg": 0.0,
+      "maximum_speed_m_s": 0.000138607,
+      "scene_remained_active_beyond_previous_crash_point": true,
+      "artifact": "docs/project/drone_prearm_static_stability_2026-07-23.json",
+      "artifact_sha256": "a6189d46dd2f94b8a4972c951cca0f56cfbad0e404fb7c05fcd1cb192b0c8ea0"
+    },
+    "powered_contact_ticket": "not_run"
+  }
+}

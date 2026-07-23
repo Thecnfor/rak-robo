@@ -51,13 +51,14 @@ PX4 外部仿真必须按以下顺序初始化，不能让 EKF 在侧舱门关�
 1. `docker compose down` 停止 PX4，再加载并播放 Isaac 场景。
 2. 依次向 `/cargo_bay/command` 发布 `left_close`、`bottom_close`。
 3. 确认 `/drone0/state/pose` 连续 3 s 处于
-   `(4.55,-0.38,1.13)±0.015 m`、速度 `<0.05 m/s`、横滚/俯仰 `<0.5°`。
+   `(4.55,-0.38,1.13)±0.004 m`、速度 `<0.05 m/s`、横滚/俯仰 `<0.5°`。
 4. 最后启动 PX4 Docker，等 `/fmu/out/vehicle_status_v1` 报告预检通过。
 
 2026-07-23 的对照试验证明，场景默认 `left_open()` 后立即启动 PX4 会把关门瞬态带入
 EKF；按上述顺序启动后，Isaac/PX4 横滚和俯仰差缩小到约 `0.03°`。
-`0.015 m` 位置门限与导轨单侧间隙一致；触地点落在导轨角部时即使旧的 `0.02 m`
-门限会通过，也必须重载场景重新居中，不能直接进行下一轮增推。
+`0.004 m` 位置门限比导轨单侧 `0.005 m` 间隙保留 `1 mm` 余量；触地点落在导轨
+角部时即使旧的 `0.02 m` 门限会通过，也必须重载场景重新居中，不能直接进行下一轮
+增推。
 
 不要同时运行 systemd 的 GUI Isaac 和上述独立 launcher。若 GUI 服务正在使用，应在
 Kit Script Editor 执行：
@@ -142,7 +143,7 @@ DRONE_BACKEND=direct_rotor ros2 run bridge_competition_pkg \
 - `px4_map_origin`：PX4 local `(0,0,0)` 对应的 Isaac 世界 ENU 出生点；当前 X1 初值
   `[4.55,-0.38,1.13]`。
 - `prearm_spawn_position`：Isaac 原始世界位姿的合法起飞支架中心，当前同为
-  `[4.55,-0.38,1.13]`。预解锁还必须同时满足位置误差 ≤0.02 m、速度 ≤0.05 m/s、
+  `[4.55,-0.38,1.13]`。预解锁还必须同时满足位置误差 ≤0.004 m、速度 ≤0.05 m/s、
   横滚/俯仰绝对值 ≤3°；支架状态字符串不能替代这项实体位姿检查。
 - `drop_search_pose`：从最终 USD/比赛实景提取，当前 `[0,0,1.8]` 是占位。
 - `takeoff_height` 和 `virtual_ceiling`：按净空校准。
@@ -233,14 +234,16 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p fixed_step_clearances:="[0.10]" \
   -p fixed_hold_altitude:=1.2309 \
   -p fixed_step_timeout:=30.0 \
+  -p prearm_position_tolerance:=0.004 \
   -p fixed_target_horizontal_tolerance:=0.02 \
   -p fixed_target_altitude_tolerance:=0.015 \
-  -p cradle_touchdown:=true
+  -p cradle_touchdown:=true \
+  -p cradle_touchdown_horizontal_tolerance:=0.004
 ```
 
 探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
 里程计仍为 1.5 s。executor 明确报告 `fixed_vertical_active=false` 前，固定阶梯水平
-偏移超过 `0.012 m` 会直接 LAND；该门限比物理单侧间隙 `0.015 m` 小 `3 mm`。完整
+偏移超过 `0.012 m` 会直接 LAND。完整
 XY 控制接管后水平门限恢复为 `0.20 m`，此时
 才允许先返回落区再 LAND。低于 home >0.10 m、速度 >0.5 m/s 或倾角 >20°同样判定
 异常。验收 HOLD 期间任一采样若 XY 误差 >0.10 m、
@@ -252,9 +255,12 @@ v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和
 确认延迟时，进程持续发布安全
 意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。横向限位托架模式必须同时
 启用 `fixed_vertical_only_diagnostic`：首飞只锁高度，XY 使用零加速度，航向角留空并
-命令零偏航速率，避免机体尚受限时由估计漂移积累位置/航向控制量。当前物理导轨顶部
-为 `+0.05 m`，executor 必须在 `+0.04 m` 接管完整 XY/航向控制，并校验至少保留
-`5 mm` 交接提前量；不满足该配置约束时节点拒绝启动。接管时捕获 PX4 当前估计航向，
+命令零偏航速率，避免机体尚受限时由估计漂移积累位置/航向控制量。当前物理导轨直接
+包围 `/World/quadrotor/body/body_collision`，单侧间隙为 `5 mm`，顶部为
+`+0.05 m`。executor 必须在 `+0.03 m` 接管完整 XY/航向控制，并在下降到
+`+0.02 m` 前恢复垂直模式；这给 PX4 留出 `20 mm` 的受约束接管高度。不满足配置约束
+时节点拒绝启动。进入垂直模式前水平偏移还必须小于 `4 mm`，给导轨保留 `1 mm`
+机械余量；prearm 出生点容差同样为 `4 mm`。接管时捕获 PX4 当前估计航向，
 避免航向设定点阶跃。探针默认在偏航率超过
 0.5 rad/s 时直接请求 PX4 Land；`cradle_touchdown` 会在 LAND 前先用同一模式垂直
 回到支撑面。
@@ -281,6 +287,39 @@ v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和
 前必须重载场景扶正无人机，先核对 PhysX 质量/惯量与 PX4 模型，再保持 rate K=1.0
 逐项验证外环姿态参数。该失败也证明旧的导轨内 `0.05 m` 横移门限晚于物理边界；现已
 收紧为 `0.012 m`。当前不得继续增高。
+
+随后三次 `MC_PITCH_P=4.0`、rate K 保持 `1.0` 的 `+0.10 m` 诊断均由安全门限主动
+LAND 并完成 disarm，没有坠机。ULog 实际最大俯仰分别约 `1.66°`、`0.82°`，最后一轮
+最大横滚约 `1.16°`，电机峰值低于 `0.557`；因此这些轮次没有复现 +0.20 m 的姿态
+发散。旧导轨却引用了无碰撞 API 的 `transparent_cargo_bay` 外观包围盒，真实
+`body_collision` 单侧间隙仍为 15--17.5 mm，12 mm 门限会在产生导轨接触前触发。
+场景现已改为用实际主刚体碰撞盒生成 5 mm 间隙导轨，并要求 PX4 启动前关闭左侧舱门。
+由于货舱在 Y 方向比主机身更宽，四面导轨还必须显式过滤货舱本体、两扇舱门、锁定
+载荷和旋翼，只保留与主机身碰撞；否则初始重叠会令 PhysX articulation 变成 NaN。
+该过滤修复已通过 9 项离线几何测试；零电机实景连续 10 秒收到 136 个采样，保留的
+每秒样本最大位置漂移为 `1.23e-7 m`、横滚/俯仰为 0°、最大速度为
+`0.000139 m/s`，且服务跨过旧故障时间点后仍保持
+active。它尚未取得带电接触票据，因此禁止直接重试 `+0.20 m`。
+
+`fixed_guided_horizontal_limit_m=0.012` 是“导轨接触失效时立即 LAND”的独立软件
+故障门限，不是导轨自由间隙；不得再要求它小于 4 mm 的 prearm/返架居中门限。
+
+下一次带电前按以下顺序执行：
+
+1. 在无 PX4 状态下验证六个支撑目标存在、主刚体到四面导轨的间隙为 `5±1 mm`，并用
+   PhysX 接触报告或低速水平推压证明 `body_collision` 会碰到导轨。
+2. 启动 PX4 后先完成静置姿态门限，确认 raw/PX4 横滚俯仰差均小于 `3°`。
+3. 仅运行 `+0.10 m`、5 s HOLD；要求交接前水平偏移 `<0.012 m`、交接发生在
+   `+0.03 m`，全程倾角 `<15°`、速度 `<0.05 m/s`，并自动返架、LAND、disarm。
+4. 首次部署先安装锁定版本的 ULog 工具依赖：
+   `python3 -m pip install --user -r src/drone_navigation_pkg/requirements-flight-tools.txt`。
+   随后对 ULog 运行
+   `ros2 run drone_navigation_pkg ulog_attitude_audit <file.ulg>`；只有探针、ULog、
+   接触证据三者同时通过后，才重新开放 `+0.20 m/10 s`。
+
+本轮数据摘要见
+`docs/project/drone_pitch_handoff_evidence_2026-07-23.json`；零电机原始抽样见
+`docs/project/drone_prearm_static_stability_2026-07-23.json`。
 
 现场的拒绝/通过对照数据见
 `docs/project/prearm_pose_gate_evidence_2026-07-22.json`。

@@ -50,15 +50,15 @@ public:
     fixed_vertical_only_diagnostic_ = declare_parameter<bool>(
       "fixed_vertical_only_diagnostic", false);
     fixed_vertical_release_clearance_ = declare_parameter<double>(
-      "fixed_vertical_release_clearance", 0.04);
+      "fixed_vertical_release_clearance", 0.03);
     fixed_vertical_reengage_clearance_ = declare_parameter<double>(
-      "fixed_vertical_reengage_clearance", 0.03);
+      "fixed_vertical_reengage_clearance", 0.02);
     fixed_vertical_guide_height_ = declare_parameter<double>(
       "fixed_vertical_guide_height", 0.05);
     fixed_vertical_minimum_handoff_lead_ = declare_parameter<double>(
       "fixed_vertical_minimum_handoff_lead", 0.005);
     fixed_vertical_guide_radius_ = declare_parameter<double>(
-      "fixed_vertical_guide_radius", 0.02);
+      "fixed_vertical_guide_radius", 0.004);
     fixed_setpoint_timeout_ = declare_parameter<double>(
       "fixed_setpoint_timeout", 0.6);
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
@@ -693,11 +693,11 @@ private:
   double minimum_replan_execution_seconds_{1.0};
   double ground_disarm_delay_seconds_{2.0};
   double fixed_setpoint_timeout_{0.6};
-  double fixed_vertical_release_clearance_{0.04};
-  double fixed_vertical_reengage_clearance_{0.03};
+  double fixed_vertical_release_clearance_{0.03};
+  double fixed_vertical_reengage_clearance_{0.02};
   double fixed_vertical_guide_height_{0.05};
   double fixed_vertical_minimum_handoff_lead_{0.005};
-  double fixed_vertical_guide_radius_{0.02};
+  double fixed_vertical_guide_radius_{0.004};
   bool allow_fixed_setpoint_diagnostic_{false};
   bool allow_force_disarm_diagnostic_{false};
   bool fixed_vertical_only_diagnostic_{false};

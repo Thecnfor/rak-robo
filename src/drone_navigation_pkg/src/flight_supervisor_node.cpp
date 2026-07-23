@@ -71,7 +71,7 @@ public:
     prearm_limits_.expected_position = {
       prearm_spawn[0], prearm_spawn[1], prearm_spawn[2]};
     prearm_limits_.position_tolerance = declare_parameter<double>(
-      "prearm_position_tolerance", 0.015);
+      "prearm_position_tolerance", 0.004);
     prearm_limits_.max_speed = declare_parameter<double>("prearm_max_speed", 0.05);
     prearm_limits_.max_tilt_radians = declare_parameter<double>(
       "prearm_max_tilt_deg", 3.0) * kPi / 180.0;

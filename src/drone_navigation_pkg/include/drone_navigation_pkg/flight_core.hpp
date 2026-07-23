@@ -37,7 +37,7 @@ struct PrearmPoseSample
 struct PrearmPoseLimits
 {
   Vec3 expected_position;
-  double position_tolerance{0.015};
+  double position_tolerance{0.004};
   double max_speed{0.05};
   double max_tilt_radians{0.05235987755982989};
 };

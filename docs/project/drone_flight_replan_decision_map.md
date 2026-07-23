@@ -377,6 +377,38 @@ outer attitude gains while keeping the previously stable rate gain at 1.0.
 The pre-handoff probe bound is now 12 mm rather than the unsafe 50 mm. Ticket
 #10 remains open and no higher-altitude flight is authorized.
 
+Three subsequent +0.10 m diagnostic attempts kept the stable rate gains at
+1.0 and changed only the pitch outer-loop gain to `MC_PITCH_P=4.0`. All three
+were terminated by the pre-handoff safety envelope and completed PX4 LAND and
+disarm without a crash. Their ULogs show actual pitch below 1.66 degrees,
+actual roll below 1.17 degrees, balanced motor peaks below 0.557, no
+saturation and no failsafe. The first trace also showed why a handoff at
++0.04 m was too late: horizontal displacement was only 2.5 mm at +0.03 m but
+10.2 mm at +0.04 m, followed by one executor cycle before finite XY setpoints.
+The executor therefore now releases at +0.03 m and re-engages at +0.02 m.
+
+The remaining pre-handoff movement was not a PX4 attitude failure. Offline USD
+inspection found that the old guide envelope came from
+`transparent_cargo_bay`, which is a visual Xform with no collision or rigid
+body API. The actual main collision
+`/World/quadrotor/body/body_collision` remained 15--17.5 mm from those walls,
+so the 12 mm abort gate fired before any lateral contact could occur. The
+scene now generates the four guide walls directly around the main collision
+with 5 mm clearance, filters the wider cargo body, doors, locked payload and
+rotors from those walls, and closes the left cargo door before PX4 estimator
+startup. Without the cargo filter, the initial wall overlap drove the
+articulation to NaN and Isaac Sim exited with SIGSEGV. Nine offline geometry
+tests now pass. A 10-second unpowered live capture received 136 poses; its
+retained one-second samples had 1.23e-7 m maximum position drift, zero
+roll/pitch and 0.000139 m/s maximum speed, while the scene remained active
+beyond the former crash point. The persisted sample and hash are referenced by
+the consolidated evidence. This is not yet a
+powered flight ticket: the next gate is a PhysX contact-report or low-speed push proof,
+followed by exactly one +0.10 m/5 s run. No +0.20 m attempt is authorized
+until that run, the probe, and the ULog attitude audit all pass. Consolidated
+evidence is in
+[`drone_pitch_handoff_evidence_2026-07-23.json`](drone_pitch_handoff_evidence_2026-07-23.json).
+
 The diagnostic probe now treats the 10 s HOLD criteria as hard per-sample gates,
 observes normalized motor output for saturation, and rechecks the measured
 touchdown after disarm. A numerically valid rectangle is no longer sufficient:

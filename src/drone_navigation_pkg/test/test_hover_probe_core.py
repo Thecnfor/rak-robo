@@ -87,7 +87,7 @@ class HoverProbeCoreTest(unittest.TestCase):
             expected_position=(4.55, -0.38, 1.13)
         )
         centered_after_door_close = CORE.PrearmPoseSample(
-            position=(4.559775, -0.379631, 1.130005),
+            position=(4.5539, -0.38, 1.13),
             speed_mps=0.0,
             roll_deg=0.0,
             pitch_deg=0.0,
@@ -298,6 +298,20 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertEqual(
             CORE.cradle_touchdown_target(region, 1.13),
             (4.55, -0.38, 1.13),
+        )
+        self.assertTrue(
+            CORE.guided_touchdown_reached(0.004, 0.015, 0.05)
+        )
+        self.assertFalse(
+            CORE.guided_touchdown_reached(0.0041, 0.015, 0.05)
+        )
+        self.assertFalse(
+            CORE.guided_touchdown_reached(
+                0.003,
+                0.015,
+                0.05,
+                guide_radius_m=0.005,
+            )
         )
 
     def test_actuator_saturation_requires_finite_outputs_below_limit(self):

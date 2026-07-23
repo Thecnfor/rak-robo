@@ -1,0 +1,104 @@
+{
+  "captured_at": "2026-07-23T17:20:00Z",
+  "duration_s": 10.0,
+  "environment": {
+    "isaac_scene_service": "active",
+    "px4_container": "stopped",
+    "ros_domain_id": 45,
+    "rmw_implementation": "rmw_fastrtps_cpp"
+  },
+  "topics": [
+    "/drone0/state/pose",
+    "/drone0/state/twist"
+  ],
+  "sampling_method": "rclpy sensor-data QoS; retain the latest pose and speed at one-second wall-time intervals",
+  "received_counts": {
+    "pose": 136,
+    "twist": 136
+  },
+  "summary": {
+    "maximum_position_drift_m": 1.22723266e-7,
+    "maximum_abs_roll_deg": 0.0,
+    "maximum_abs_pitch_deg": 0.0,
+    "maximum_speed_m_s": 0.000138607
+  },
+  "samples": [
+    {
+      "elapsed_s": 0.25,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 0.000120857
+    },
+    {
+      "elapsed_s": 1.017,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 1.1656e-5
+    },
+    {
+      "elapsed_s": 2.002,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 1.4003e-5
+    },
+    {
+      "elapsed_s": 3.004,
+      "xyz_m": [4.550000191, -0.379999846, 1.130000114],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 0.000138607
+    },
+    {
+      "elapsed_s": 4.0,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 1.1287e-5
+    },
+    {
+      "elapsed_s": 5.004,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 5.5048e-5
+    },
+    {
+      "elapsed_s": 6.011,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 2.4055e-5
+    },
+    {
+      "elapsed_s": 7.004,
+      "xyz_m": [4.550000191, -0.379999816, 1.130000114],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 0.000107452
+    },
+    {
+      "elapsed_s": 8.02,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 7.201e-6
+    },
+    {
+      "elapsed_s": 9.0,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 6.6343e-5
+    },
+    {
+      "elapsed_s": 10.001,
+      "xyz_m": [4.550000191, -0.379999846, 1.129999995],
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "speed_m_s": 8.406e-5
+    }
+  ]
+}

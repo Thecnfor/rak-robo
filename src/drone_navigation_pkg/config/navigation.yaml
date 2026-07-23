@@ -36,13 +36,17 @@
     # commands zero yaw rate; full XY/yaw control captures the current heading
     # at release and reverts before descending into the guide.
     fixed_vertical_only_diagnostic: false
-    # The physical lateral guide ends at +0.05 m. Enable PX4 XY control 1 cm
-    # before exit so there is no unconstrained horizontal-control dead band.
-    fixed_vertical_release_clearance: 0.04
-    fixed_vertical_reengage_clearance: 0.03
+    # The physical lateral guide ends at +0.05 m. The 2026-07-23 ULog showed
+    # only 2.5 mm XY drift at +0.03 m, but 10.2 mm at +0.04 m and another
+    # executor cycle before finite XY setpoints arrived. Hand over at +0.03 m
+    # so PX4 has 20 mm of guide height to establish horizontal control.
+    fixed_vertical_release_clearance: 0.03
+    fixed_vertical_reengage_clearance: 0.02
     fixed_vertical_guide_height: 0.05
     fixed_vertical_minimum_handoff_lead: 0.005
-    fixed_vertical_guide_radius: 0.02
+    # The main body has 5 mm physical clearance to each wall. Require a
+    # 1 mm margin before re-entering vertical-only control for touchdown.
+    fixed_vertical_guide_radius: 0.004
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.
@@ -51,8 +55,8 @@
     px4_map_origin: [4.55, -0.38, 1.13]
     # Isaac world pose envelope required before any ground arm request.
     prearm_spawn_position: [4.55, -0.38, 1.13]
-    # Must stay inside the 15 mm lateral-guide clearance, not merely on its wall.
-    prearm_position_tolerance: 0.015
+    # Must stay inside the 5 mm lateral-guide clearance with 1 mm margin.
+    prearm_position_tolerance: 0.004
     prearm_max_speed: 0.05
     prearm_max_tilt_deg: 3.0
     # Reject arm if PX4's estimated roll/pitch has not converged to the Isaac

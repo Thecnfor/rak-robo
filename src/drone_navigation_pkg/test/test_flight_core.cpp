@@ -272,7 +272,7 @@ TEST(ExecutorFixedDiagnostic, VerticalOnlyAvoidsConstrainedPositionAndYawWindup)
   EXPECT_DOUBLE_EQ(full.yaw, 1.2);
 }
 
-TEST(ExecutorFixedDiagnostic, HandsPositionControlOverOnlyAboveGuideWithHysteresis)
+TEST(ExecutorFixedDiagnostic, HandsPositionControlOverBeforeGuideExitWithHysteresis)
 {
   EXPECT_FALSE(verticalOnlyDiagnosticActive(false, true, true, 0.0, 0.17, 0.16));
   EXPECT_TRUE(verticalOnlyDiagnosticActive(true, true, false, 0.0, 0.17, 0.16));
@@ -288,7 +288,7 @@ TEST(ExecutorFixedDiagnostic, HandsPositionControlOverOnlyAboveGuideWithHysteres
 
 TEST(ExecutorFixedDiagnostic, RequiresHorizontalControlBeforePhysicalGuideExit)
 {
-  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.04, 0.03, 0.05, 0.005));
+  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.03, 0.02, 0.05, 0.005));
   EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.08, 0.06, 0.05, 0.005));
   EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.05, 0.04, 0.05, 0.005));
 }
