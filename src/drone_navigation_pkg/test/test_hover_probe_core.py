@@ -136,6 +136,18 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.51, 8.0))
         self.assertFalse(CORE.fixed_step_envelope_safe(0.10, 0.02, 0.20, 20.1))
 
+    def test_guided_horizontal_limit_stays_inside_physical_clearance(self):
+        self.assertEqual(
+            CORE.fixed_step_horizontal_limit(False, 0.012, 0.20),
+            0.012,
+        )
+        self.assertEqual(
+            CORE.fixed_step_horizontal_limit(True, 0.012, 0.20),
+            0.20,
+        )
+        with self.assertRaises(ValueError):
+            CORE.fixed_step_horizontal_limit(False, 0.015, 0.015)
+
     def test_full_horizontal_control_requires_explicit_executor_handoff(self):
         self.assertFalse(
             CORE.full_horizontal_control_available(

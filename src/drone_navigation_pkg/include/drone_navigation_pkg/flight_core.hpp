@@ -168,6 +168,11 @@ bool forceDisarmDiagnosticAllowed(
   bool armed,
   bool auto_land);
 
+bool forceDisarmBypassesLandLatch(
+  bool diagnostic_enabled,
+  bool land_latched,
+  const std::string & operator_mode);
+
 ExecutorRequestedMode reduceExecutorRequest(
   ExecutorRequestedMode current,
   ExecutorRequestedMode incoming,

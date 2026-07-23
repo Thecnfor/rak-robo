@@ -334,8 +334,10 @@ on the table and disarmed, but outside the cradle.
 The repaired contract makes the guide height explicit, validates that the
 handoff is at least 5 mm below it, and now releases at +0.04 m for the +0.05 m
 guide. The probe treats `fixed_vertical_active=false` as the only evidence that
-XY recovery is available; before that token, 0.05 m lateral displacement causes
-an immediate LAND instead of `ABORT_RETURN`. Evidence for the failed regression
+XY recovery is available. The first repair used a 0.05 m pre-handoff bound;
+the later K=0.5 regression proved that this still extended beyond the physical
+15 mm guide clearance. The final bound is 12 mm, leaving 3 mm margin, and
+causes an immediate LAND instead of `ABORT_RETURN`. Evidence for the failed regression
 is `bags/drone_low_guide_closed_first_010m_20260723`,
 `/tmp/drone_low_guide_closed_first_010m_20260723.json`, and PX4 ULog
 `docker/px4/ulog/2026-07-23/05_59_42.ulg`. Ticket #10 remains open until the
@@ -372,7 +374,8 @@ stopped, and both temporary gain overrides were removed from Docker Compose.
 Do not repeat this gain setting. Before another powered test, reset the scene,
 measure the PhysX inertia tensor against the PX4 plant model, and investigate
 outer attitude gains while keeping the previously stable rate gain at 1.0.
-Ticket #10 remains open and no higher-altitude flight is authorized.
+The pre-handoff probe bound is now 12 mm rather than the unsafe 50 mm. Ticket
+#10 remains open and no higher-altitude flight is authorized.
 
 The diagnostic probe now treats the 10 s HOLD criteria as hard per-sample gates,
 observes normalized motor output for saturation, and rechecks the measured

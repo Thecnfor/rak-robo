@@ -350,6 +350,18 @@ TEST(ExecutorLanding, ForceDisarmDiagnosticRequiresTerminalAutoLand)
     true, ExecutorFlightState::LAND_LATCHED, true, false));
 }
 
+TEST(OperatorLandingLatch, ForceDisarmDiagnosticBypassesLatchedLandProjection)
+{
+  EXPECT_TRUE(drone_navigation::forceDisarmBypassesLandLatch(
+    true, true, "FORCE_DISARM"));
+  EXPECT_FALSE(drone_navigation::forceDisarmBypassesLandLatch(
+    false, true, "FORCE_DISARM"));
+  EXPECT_FALSE(drone_navigation::forceDisarmBypassesLandLatch(
+    true, true, "LAND"));
+  EXPECT_FALSE(drone_navigation::forceDisarmBypassesLandLatch(
+    true, false, "FORCE_DISARM"));
+}
+
 TEST(OperatorArmGate, AllowsGroundArmAndAlreadyActiveOffboardTracking)
 {
   EXPECT_TRUE(drone_navigation::operatorArmRequestAllowed(

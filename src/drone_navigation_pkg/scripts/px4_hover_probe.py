@@ -49,6 +49,7 @@ from hover_probe_core import (
     cradle_touchdown_target,
     crashed_airframe_force_disarm_ready,
     fixed_step_envelope_safe,
+    fixed_step_horizontal_limit,
     fixed_step_reached,
     full_horizontal_control_available,
     ground_observation_usable,
@@ -129,6 +130,16 @@ class HoverProbe(Node):
         self.fixed_step_max_tilt_deg = float(
             self.declare_parameter("fixed_step_max_tilt_deg", 15.0).value
         )
+        self.fixed_guided_horizontal_limit_m = float(
+            self.declare_parameter(
+                "fixed_guided_horizontal_limit_m", 0.012
+            ).value
+        )
+        self.fixed_full_xy_horizontal_limit_m = float(
+            self.declare_parameter(
+                "fixed_full_xy_horizontal_limit_m", 0.20
+            ).value
+        )
         self.cradle_touchdown = bool(
             self.declare_parameter("cradle_touchdown", False).value
         )
@@ -207,6 +218,18 @@ class HoverProbe(Node):
         self.output_path = Path(
             str(self.declare_parameter("output_path", "/tmp/drone_hover_probe.json").value)
         )
+        fixed_step_horizontal_limit(
+            False,
+            self.fixed_guided_horizontal_limit_m,
+            self.fixed_full_xy_horizontal_limit_m,
+        )
+        if (
+            self.fixed_guided_horizontal_limit_m
+            >= self.prearm_limits.position_tolerance_m
+        ):
+            raise ValueError(
+                "guided horizontal limit must remain inside guide clearance"
+            )
         if (
             self.rounds < 1
             or self.hover_seconds <= 0.0
@@ -895,6 +918,12 @@ class HoverProbe(Node):
             "fixed_target_altitude_tolerance": self.fixed_target_altitude_tolerance,
             "fixed_step_max_speed_mps": self.fixed_step_max_speed_mps,
             "fixed_step_max_tilt_deg": self.fixed_step_max_tilt_deg,
+            "fixed_guided_horizontal_limit_m": (
+                self.fixed_guided_horizontal_limit_m
+            ),
+            "fixed_full_xy_horizontal_limit_m": (
+                self.fixed_full_xy_horizontal_limit_m
+            ),
             "fixed_hold_altitude": self.fixed_hold_altitude,
             "max_yaw_rate_rad_s": self.max_yaw_rate_rad_s,
             "max_yaw_rate_seen_rad_s": round(self.max_yaw_rate_seen, 4),
@@ -1039,8 +1068,10 @@ class HoverProbe(Node):
             full_horizontal_control = full_horizontal_control_available(
                 self.executor_state
             )
-            max_horizontal_displacement = (
-                0.20 if full_horizontal_control else 0.05
+            max_horizontal_displacement = fixed_step_horizontal_limit(
+                full_horizontal_control,
+                self.fixed_guided_horizontal_limit_m,
+                self.fixed_full_xy_horizontal_limit_m,
             )
             if not fixed_step_envelope_safe(
                 horizontal_from_home,

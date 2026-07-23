@@ -460,6 +460,22 @@ def fixed_step_envelope_safe(
     )
 
 
+def fixed_step_horizontal_limit(
+    full_horizontal_control: bool,
+    guided_limit_m: float = 0.012,
+    full_control_limit_m: float = 0.20,
+) -> float:
+    """Use an inside-guide limit until executor handoff is explicit."""
+    if (
+        not isfinite(guided_limit_m)
+        or not isfinite(full_control_limit_m)
+        or guided_limit_m <= 0.0
+        or full_control_limit_m <= guided_limit_m
+    ):
+        raise ValueError("horizontal limits require 0 < guided < full control")
+    return full_control_limit_m if full_horizontal_control else guided_limit_m
+
+
 def yaw_rate_envelope_safe(yaw_rate_rad_s: float, max_yaw_rate_rad_s: float) -> bool:
     """Reject an uncontrolled spin before attempting any lateral recovery."""
     return (
@@ -468,6 +484,8 @@ def yaw_rate_envelope_safe(yaw_rate_rad_s: float, max_yaw_rate_rad_s: float) -> 
         and max_yaw_rate_rad_s > 0.0
         and abs(yaw_rate_rad_s) <= max_yaw_rate_rad_s
     )
+
+
 class StabilityWindow:
     def __init__(self, horizon_seconds: float = 4.0):
         self._horizon = horizon_seconds

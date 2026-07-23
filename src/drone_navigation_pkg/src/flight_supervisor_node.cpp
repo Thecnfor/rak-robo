@@ -413,13 +413,21 @@ private:
     const bool operator_arm_allowed = operator_arm_requested && operatorArmRequestAllowed(
       have_operator_goal_, side_door_closed_, inputs.px4_ready,
       prearm_pose_valid, have_landed_status_, landed_, armed_, offboard_);
+    const bool force_disarm_override = operator_override &&
+      forceDisarmBypassesLandLatch(
+        allow_force_disarm_diagnostic_, operator_land_latched_, *operator_mode_);
     if (!operator_override && decision.command_close_side_door) {
       publishString(cargo_command_publisher_, "left_close");
     }
     if (!operator_override && decision.command_open_bottom_door) {
       publishString(cargo_command_publisher_, "bottom_open");
     }
-    if (decision.request_land) {
+    if (force_disarm_override) {
+      // A diagnostic FORCE_DISARM is only accepted after LAND has latched.
+      // Forward it ahead of the ordinary latch projection; the executor still
+      // requires terminal AUTO_LAND, armed state, and its explicit opt-in.
+      publishOperatorOverride();
+    } else if (decision.request_land) {
       publishString(control_mode_publisher_, "LAND");
     } else if (decision.hold_position) {
       publishString(control_mode_publisher_, "HOLD");
