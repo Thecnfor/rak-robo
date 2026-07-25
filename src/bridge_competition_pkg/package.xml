@@ -10,6 +10,7 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <depend>rosgraph_msgs</depend>
   <depend>rosidl_runtime_py</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>

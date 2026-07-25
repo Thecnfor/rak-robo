@@ -3,6 +3,7 @@
 #include "drone_navigation_pkg/flight_core.hpp"
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -26,6 +27,7 @@ using drone_navigation::executorSafetyAction;
 using drone_navigation::boolTokenValue;
 using drone_navigation::fixedDiagnosticControlSetpoint;
 using drone_navigation::fixedSetpointReady;
+using drone_navigation::nextMonotonicTimestampMicros;
 using drone_navigation::verticalOnlyDiagnosticActive;
 using drone_navigation::verticalOnlyHandoffConfigurationSafe;
 
@@ -60,6 +62,18 @@ TEST(CoordinateFrames, ConvertsNedFrdToEnuFlu)
     ros.attitude_flu_to_enu.z * ros.attitude_flu_to_enu.z +
     ros.attitude_flu_to_enu.w * ros.attitude_flu_to_enu.w);
   EXPECT_NEAR(quaternion_norm, 1.0, kTolerance);
+}
+
+TEST(Px4MessageTimestamp, AdvancesWhenSimulationClockFreezesOrMovesBackward)
+{
+  EXPECT_EQ(nextMonotonicTimestampMicros(1000U, 0U), 1000U);
+  EXPECT_EQ(nextMonotonicTimestampMicros(1000U, 1000U), 1001U);
+  EXPECT_EQ(nextMonotonicTimestampMicros(900U, 1001U), 1002U);
+  EXPECT_EQ(nextMonotonicTimestampMicros(2000U, 1002U), 2000U);
+  EXPECT_EQ(
+    nextMonotonicTimestampMicros(
+      1U, std::numeric_limits<std::uint64_t>::max()),
+    std::numeric_limits<std::uint64_t>::max());
 }
 
 TEST(VoxelPlanner, DetoursAroundInflatedObstacle)

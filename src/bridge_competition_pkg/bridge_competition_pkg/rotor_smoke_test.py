@@ -32,15 +32,13 @@ class RotorSmokeTest(Node):
 
     def run(self) -> None:
         try:
-            for rotor_index, publisher in enumerate(self._publishers):
+            for rotor_index in range(len(self._publishers)):
                 self.get_logger().warn(
                     f'pulsing rotor {rotor_index} at {self._speed:.1f} rad/s'
                 )
                 deadline = time.monotonic() + self._pulse
                 while time.monotonic() < deadline:
-                    message = Float64()
-                    message.data = self._speed
-                    publisher.publish(message)
+                    self._publish_pattern(rotor_index, self._speed)
                     rclpy.spin_once(self, timeout_sec=0.0)
                     time.sleep(0.02)
                 self._zero_all()
@@ -49,13 +47,18 @@ class RotorSmokeTest(Node):
             self._zero_all(repeat=10)
 
     def _zero_all(self, repeat: int = 1) -> None:
-        message = Float64()
-        message.data = 0.0
         for _ in range(repeat):
-            for publisher in self._publishers:
-                publisher.publish(message)
+            self._publish_pattern(-1, 0.0)
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(0.02)
+
+    def _publish_pattern(self, active_rotor: int, speed: float) -> None:
+        for rotor_index, publisher in enumerate(self._publishers):
+            publisher.publish(
+                Float64(
+                    data=speed if rotor_index == active_rotor else 0.0
+                )
+            )
 
 
 def main(args=None) -> None:

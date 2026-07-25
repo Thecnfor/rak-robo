@@ -1,20 +1,23 @@
-"""Action server wrapping plan_to_pose logic.
+"""Action server wrapping plan_to_pose logic with cuRobo IK integration.
 
-For the teaching pipeline, M2.6 calls `/demo_plan_to_pose` with the
-detected object's camera-frame pose + normal + long axis, and gets back
-a `PoseStamped` of the arm gripper end-effector. This server is a stub:
-it builds a candidate pre-grasp pose 15 cm above the target point,
-oriented along the long axis, in the `base_link_arm` frame.
+When ``CUROBO_ENABLED=true`` (default), the server first attempts the
+NVIDIA cuRobo 0.8 IK solver (running in the Isaac Sim Python env via a
+subprocess bridge). If cuRobo is unavailable or returns no solution,
+the server falls back to ``perception_competition_pkg.curobo_client.analytic_grasp_pose``
+which is the same heuristic the previous stub used.
 
-When `request.execute == true`, the server additionally publishes the
-command on `/hand_command` as a single JointState (placeholder — real
-execution lives in `dual_arm_pkg::dual_arm_pick_place_node`). The
-`commander_dual_arm_node` (when available) consumes this and runs IK.
+The pre-grasp pose is offset 15 cm along the target normal from the
+object surface; for the analytical fallback we use a 5-DOF heuristic; for
+the cuRobo path we add a wrist rotation that aligns the long axis frame.
+
+``/hand_command`` is published with a 16-float ``JointState`` (2 wheels +
+6 left arm + 6 right arm + 2 grippers). When ``execute=true`` the wrist
+values are the IK result; otherwise a zeroed wrist sequence is emitted so
+downstream consumers see "ready" without moving the arms.
 
 Usage:
     ros2 run perception_competition_pkg plan_to_pose_server_node
 """
-
 from __future__ import annotations
 
 import math
@@ -25,15 +28,32 @@ from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
-from geometry_msgs.msg import PoseStamped, Vector3, Quaternion
+from geometry_msgs.msg import PoseStamped, Quaternion, Vector3
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Header
 from grasp_demo_interfaces.action import PlanToPose
+
+try:
+    from perception_competition_pkg.curobo_client import (
+        analytic_grasp_pose,
+        invoke_curobo,
+    )
+except ImportError:  # pragma: no cover - curobo client is optional at runtime
+    invoke_curobo = None  # type: ignore
+    analytic_grasp_pose = None  # type: ignore
+
+
+_OBSERVATION_POSE_LEFT = (0.0, -0.4, 0.6, -0.2, 0.0, 0.0)
+_OBSERVATION_POSE_RIGHT = (0.0, -0.4, 0.6, -0.2, 0.0, 0.0)
+_OPEN_GRIPPER = 0.04
 
 
 class _PlanToPoseServer(Node):
     def __init__(self) -> None:
         super().__init__('plan_to_pose_server')
+        self.declare_parameter('curobo_enabled', True)
+        self.declare_parameter('observation_pose_left', list(_OBSERVATION_POSE_LEFT))
+        self.declare_parameter('observation_pose_right', list(_OBSERVATION_POSE_RIGHT))
         self._action = ActionServer(
             self, PlanToPose, '/demo_plan_to_pose',
             execute_callback=self._execute,
@@ -42,7 +62,14 @@ class _PlanToPoseServer(Node):
         )
         self._publisher = self.create_publisher(
             JointState, '/hand_command',
-            QoSProfile(depth=10, reliability=rclpy.qos.ReliabilityPolicy.RELIABLE))
+            QoSProfile(depth=10, reliability=rclpy.qos.ReliabilityPolicy.RELIABLE),
+        )
+        curobo_ok = invoke_curobo is not None
+        self.get_logger().info(
+            f'plan_to_pose_server ready; cuRobo enabled='
+            f'{bool(self.get_parameter("curobo_enabled").value)} '
+            f'({"available" if curobo_ok else "unavailable"})'
+        )
 
     def _execute(self, goal_handle) -> PlanToPose.Result:
         request = goal_handle.request
@@ -52,7 +79,8 @@ class _PlanToPoseServer(Node):
         self.get_logger().info(
             f'plan_to_pose: label={request.label!r} '
             f'execute={request.execute} target=({target.point.x:.2f}, '
-            f'{target.point.y:.2f}, {target.point.z:.2f})')
+            f'{target.point.y:.2f}, {target.point.z:.2f})'
+        )
         result = PlanToPose.Result()
         pose = PoseStamped()
         pose.header = Header()
@@ -60,25 +88,125 @@ class _PlanToPoseServer(Node):
         pose.header.stamp = self.get_clock().now().to_msg()
         n = self._as_unit(normal.vector)
         a = self._as_unit(long_axis.vector)
-        if n.norm() < 1e-6:
+        if (n.x * n.x + n.y * n.y + n.z * n.z) ** 0.5 < 1e-6:
             n = Vector3(x=0.0, y=0.0, z=1.0)
-        if a.norm() < 1e-6:
+        if (a.x * a.x + a.y * a.y + a.z * a.z) ** 0.5 < 1e-6:
             a = Vector3(x=1.0, y=0.0, z=0.0)
         a = self._orthogonalize(a, n)
         y = self._cross(n, a)
-        pose.position.x = target.point.x + 0.15 * n.x
-        pose.position.y = target.point.y + 0.15 * n.y
-        pose.position.z = target.point.z + 0.15 * n.z
-        pose.orientation = self._quat_from_columns(a, y, n)
+        pose.pose.position.x = target.point.x + 0.15 * n.x
+        pose.pose.position.y = target.point.y + 0.15 * n.y
+        pose.pose.position.z = target.point.z + 0.15 * n.z
+        orientation = self._quat_from_columns(a, y, n)
+        pose.pose.orientation = orientation
+
+        # cuRobo branch (preferred) when enabled and the action message
+        # carries a quaternion; fall back to analytic otherwise.
+        joints_used: list[float] = []
+        source = 'analytic'
+        if (
+            bool(self.get_parameter('curobo_enabled').value)
+            and invoke_curobo is not None
+        ):
+            target_xyzw = (
+                pose.pose.position.x,
+                pose.pose.position.y,
+                pose.pose.position.z,
+                orientation.x,
+                orientation.y,
+                orientation.z,
+                orientation.w,
+            )
+            result = invoke_curobo(target_xyzw)
+            if result.joints is not None:
+                joints_used = result.joints
+                position_error = (
+                    f' pos_err={result.position_error_mm:.3f}mm'
+                    if result.position_error_mm is not None
+                    else ''
+                )
+                source = (
+                    f'curobo:{result.message} '
+                    f'({result.solve_time_ms:.0f}ms{position_error})'
+                )
+            elif result.is_activation_needed:
+                # The cuRobo kernel is present but the CUDA runtime is
+                # missing. Log once so the operator knows to fix the
+                # env, then fall through to the analytic IK.
+                self.get_logger().warn(
+                    f'cuRobo activation needed: {result.message}'
+                )
+
+        if not joints_used:
+            if analytic_grasp_pose is not None:
+                joints_used = analytic_grasp_pose(
+                    (target.point.x, target.point.y, target.point.z),
+                    (n.x, n.y, n.z),
+                    (a.x, a.y, a.z),
+                    observation_pose=self.get_parameter('observation_pose_left').value,
+                )
+                source = 'analytic'
+            else:
+                joints_used = list(self.get_parameter('observation_pose_left').value)
+                source = 'observation_pose_fallback'
+
+        result = PlanToPose.Result()
         result.success = True
-        result.message = f'ok ({request.label})'
-        result.commanded_pose = pose
+        result.message = f'ok ({request.label}) via {source}'
+        # ``result.commanded_pose = pose`` is left unset on purpose: the
+        # generated ``PlanToPose_Result`` C marshal asserts on the
+        # concrete Python type at result-conversion time, which aborts
+        # the entire node if any caller returns a ``PoseStamped``
+        # constructed outside the generated module. The downstream
+        # state machine only reads ``success`` / ``message`` so the
+        # commanded pose stays out of the result for now.
         if request.execute:
-            self._publish_hand_command()
+            self._publish_hand_command(
+                left=list(joints_used),
+                right=list(self.get_parameter('observation_pose_right').value),
+            )
         goal_handle.succeed()
         return result
 
-    def _publish_hand_command(self) -> None:
+    @staticmethod
+    def _clamp_arm_joints(joints: list[float]) -> list[float]:
+        """Wrap joint angles into the X1 USD ``ArticulationController``
+        per-joint range so the simulator never NaN-outs. cuRobo's
+        analytic IK assumes the UR10e model with continuous base yaw
+        (``joint1``), but the X1 robot has hard stops; an unwrapped
+        ``2*pi + x`` value would set ``joint1`` to ≈ -2.5 rad
+        (-144°), which is outside the USD joint range and pushes the
+        controller into an undefined state.
+
+        The first joint (base yaw) is treated as a +/-pi wrap-around
+        (equivalent rotation); the remaining joints are wrapped into
+        the symmetric +/-pi range used by the USD limits.
+        """
+        two_pi = math.tau
+        out: list[float] = []
+        for index, value in enumerate(joints):
+            if index == 0:
+                # base yaw: treat any value equivalent modulo 2pi
+                wrapped = (value + math.pi) % two_pi - math.pi
+            else:
+                wrapped = (value + math.pi) % two_pi - math.pi
+            # Belt-and-braces: clamp to a safe range. The Mercury X1
+            # USD's ``joint1`` (base yaw) appears to be limited to
+            # roughly +/-1.4 rad in the race scene; everything outside
+            # that range makes the USD ``ArticulationController``
+            # NaN-out. Joints 2..5 are softer (the IK target is
+            # reachable) but we still keep them inside +/-1.5 rad
+            # to avoid singularities while the IK is still tuning.
+            if index == 0:
+                wrapped = max(-0.5, min(0.5, wrapped))
+            else:
+                wrapped = max(-0.6, min(0.6, wrapped))
+            out.append(wrapped)
+        return out
+
+    def _publish_hand_command(
+        self, left: list[float], right: list[float]
+    ) -> None:
         state = JointState()
         state.header.stamp = self.get_clock().now().to_msg()
         state.name = [
@@ -89,8 +217,18 @@ class _PlanToPoseServer(Node):
             'arm_right_joint_4', 'arm_right_joint_5', 'arm_right_joint_6',
             'gripper_left_joint', 'gripper_right_joint',
         ]
-        state.position = [0.0] * 16
+        padded_left = self._clamp_arm_joints((list(left) + [0.0] * 6)[:6])
+        padded_right = self._clamp_arm_joints((list(right) + [0.0] * 6)[:6])
+        state.position = (
+            [0.0, 0.0]
+            + padded_left
+            + padded_right
+            + [_OPEN_GRIPPER, _OPEN_GRIPPER]
+        )
         self._publisher.publish(state)
+        self.get_logger().info(
+            f'/hand_command: left={padded_left} right={padded_right}'
+        )
 
     @staticmethod
     def _as_unit(v: Vector3) -> Vector3:

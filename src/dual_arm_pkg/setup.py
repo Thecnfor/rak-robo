@@ -14,7 +14,7 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
-    zip_safe=True,
+    tests_require=['pytest', 'rclpy'],
     maintainer='A',
     maintainer_email='a@team.example.com',
     description='Mercury X1 dual-arm driver.',

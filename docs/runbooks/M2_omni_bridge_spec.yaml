@@ -36,6 +36,24 @@ isaac_publishers:
   - {topic: /drone0/down_camera/color/image_raw, type: sensor_msgs/msg/Image}
   - {topic: /cargo_bay/status, type: std_msgs/msg/String}
 
+
+# 2026-07-20 主机驱动地面机器人。scene_app.py 在 setup_async 里调用
+# build_ground_cmd_graph / build_ground_joint_graph 把下面两个 graph
+# 拼到 OmniGraph 控制器里。X1 prim 路径写死到
+# /World/layout/mercury_x1_final/mercury_x1，由 prim_registry.yaml 同步。
+isaac_subscribers:
+  - topic: /cmd_vel
+    type: geometry_msgs/msg/Twist
+    omr_node: isaacsim.ros2.bridge.ROS2SubscribeTwist
+    target: isaacsim.robot.wheeled_robots.DifferentialController
+    drives: X1 four-wheel differential drive
+    graph_path: /World/CargoAvoidanceGroundCmdGraph
+  - topic: /hand_command
+    type: sensor_msgs/msg/JointState
+    omr_node: isaacsim.ros2.bridge.ROS2SubscribeJointState
+    target: isaacsim.core.nodes.ArticulationController
+    drives: X1 dual-arm 12-DOF + 2 grippers
+    graph_path: /World/CargoAvoidanceGroundJointGraph
 direct_rotor_inputs:
   - /drone0/control/rotor0/ref
   - /drone0/control/rotor1/ref

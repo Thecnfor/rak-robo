@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'drone_interface_audit = bridge_competition_pkg.interface_audit:main',
             'direct_rotor_smoke_test = bridge_competition_pkg.rotor_smoke_test:main',
+            'direct_rotor_motion_probe = bridge_competition_pkg.rotor_motion_probe:main',
             'foxglove_daemon = bridge_competition_pkg.foxglove_daemon:main',
             'chain_status = bridge_competition_pkg.chain_status:main',
             'mission_trigger = bridge_competition_pkg.mission_trigger:main',

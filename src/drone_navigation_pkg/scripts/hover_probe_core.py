@@ -84,6 +84,24 @@ def full_horizontal_control_available(executor_state: str) -> bool:
     return parse_bool_token(executor_state, "fixed_vertical_active") is False
 
 
+def update_full_horizontal_control_latch(
+    latched: bool,
+    executor_state: str,
+    reset: bool = False,
+) -> bool:
+    """Remember an explicit XY handoff despite later stale state delivery.
+
+    The executor emits both transition events and periodic lifecycle reports.
+    Under heavy simulator load DDS can deliver an older vertical-only report
+    after the handoff report.  A flight round therefore treats the first
+    explicit ``fixed_vertical_active=false`` as a one-way transition.  The
+    caller must reset the latch before each new diagnostic takeoff.
+    """
+    if reset:
+        return False
+    return latched or full_horizontal_control_available(executor_state)
+
+
 def planner_map_ready(state: str, state_age_seconds: float, timeout: float) -> bool:
     """Require a fresh planner state that proves a transformed map update."""
     return (

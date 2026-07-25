@@ -8,17 +8,25 @@ setup(
     version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
-    ],
-    install_requires=[
-        'setuptools',
-        'numpy<2',
-        'opencv-python>=4.6,<4.10',
-        'ultralytics',
-    ],
+        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/resource', ['resource/' + package_name]),
+        ('share/' + package_name + '/scripts', glob(
+            'perception_competition_pkg/scripts/*.py')),
+        ('share/' + package_name + '/robots', glob(
+            'perception_competition_pkg/scripts/*.urdf')),
+        ('share/' + package_name + '/robots', glob(
+            'perception_competition_pkg/scripts/*.yml')),
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+     ],
+     install_requires=[
+         'setuptools',
+         'numpy<2',
+         'opencv-python>=4.6,<4.10',
+         'ultralytics',
+     ],
     test_suite='test',
     zip_safe=True,
     maintainer='B',

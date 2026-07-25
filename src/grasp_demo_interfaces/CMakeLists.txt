@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/GripperCommand.action"
   "action/DroneFlightCommand.action"
   "action/CargoDoorCommand.action"
+  "action/DualGripperCommand.action"
   DEPENDENCIES builtin_interfaces geometry_msgs
 )
 

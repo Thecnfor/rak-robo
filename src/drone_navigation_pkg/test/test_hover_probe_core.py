@@ -161,6 +161,26 @@ class HoverProbeCoreTest(unittest.TestCase):
         )
         self.assertFalse(CORE.full_horizontal_control_available("LIFECYCLE ACTIVE"))
 
+    def test_full_horizontal_control_handoff_latches_until_round_reset(self):
+        latched = CORE.update_full_horizontal_control_latch(
+            False,
+            "FIXED_CONTROL vertical_only=false fixed_vertical_active=false",
+        )
+        self.assertTrue(latched)
+        self.assertTrue(
+            CORE.update_full_horizontal_control_latch(
+                latched,
+                "LIFECYCLE ACTIVE fixed_vertical_active=true",
+            )
+        )
+        self.assertFalse(
+            CORE.update_full_horizontal_control_latch(
+                latched,
+                "LIFECYCLE ACTIVE fixed_vertical_active=true",
+                reset=True,
+            )
+        )
+
     def test_abort_return_requires_positive_airborne_clearance(self):
         args = (True, False, True, True, True, True)
         self.assertFalse(

@@ -14,6 +14,20 @@
 
 namespace drone_navigation
 {
+
+std::uint64_t nextMonotonicTimestampMicros(
+  std::uint64_t proposed_timestamp,
+  std::uint64_t previous_timestamp)
+{
+  if (proposed_timestamp > previous_timestamp) {
+    return proposed_timestamp;
+  }
+  if (previous_timestamp == std::numeric_limits<std::uint64_t>::max()) {
+    return previous_timestamp;
+  }
+  return previous_timestamp + 1U;
+}
+
 namespace
 {
 

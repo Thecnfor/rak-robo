@@ -143,9 +143,13 @@ private:
     return static_cast<double>(duration.sec) + static_cast<double>(duration.nanosec) * 1e-9;
   }
 
-  std::uint64_t timestampMicros() const
+  std::uint64_t timestampMicros()
   {
-    return static_cast<std::uint64_t>(get_clock()->now().nanoseconds() / 1000);
+    const auto proposed = static_cast<std::uint64_t>(
+      get_clock()->now().nanoseconds() / 1000);
+    last_message_timestamp_ = nextMonotonicTimestampMicros(
+      proposed, last_message_timestamp_);
+    return last_message_timestamp_;
   }
 
   void publishState(const std::string & text)
@@ -698,6 +702,7 @@ private:
   double fixed_vertical_guide_height_{0.05};
   double fixed_vertical_minimum_handoff_lead_{0.005};
   double fixed_vertical_guide_radius_{0.004};
+  std::uint64_t last_message_timestamp_{0U};
   bool allow_fixed_setpoint_diagnostic_{false};
   bool allow_force_disarm_diagnostic_{false};
   bool fixed_vertical_only_diagnostic_{false};

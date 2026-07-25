@@ -51,7 +51,6 @@ from hover_probe_core import (
     fixed_step_envelope_safe,
     fixed_step_horizontal_limit,
     fixed_step_reached,
-    full_horizontal_control_available,
     ground_observation_usable,
     guided_touchdown_reached,
     hold_acceptance_passes,
@@ -70,6 +69,7 @@ from hover_probe_core import (
     takeoff_goal_reached,
     translate_target_between_origins,
     update_executor_lifecycle,
+    update_full_horizontal_control_latch,
     verified_landing_region_available,
     yaw_rate_envelope_safe,
 )
@@ -400,6 +400,7 @@ class HoverProbe(Node):
         self.land_status = None
         self.executor_state = ""
         self.executor_lifecycle = ""
+        self.full_horizontal_control_latched = False
         self.planner_state = ""
         self.side_door_closed = False
         self.bottom_door_closed = False
@@ -513,6 +514,29 @@ class HoverProbe(Node):
         self.executor_lifecycle = update_executor_lifecycle(
             self.executor_lifecycle, message.data
         )
+        if (
+            self.fixed_setpoint_diagnostic
+            and self.phase
+            in {
+                "FIXED_STEP",
+                "FIXED_HOLD_SETTLE",
+                "FIXED_HOLD",
+                "RETURN_HOME",
+                "ABORT_RETURN",
+            }
+        ):
+            was_latched = self.full_horizontal_control_latched
+            self.full_horizontal_control_latched = (
+                update_full_horizontal_control_latch(
+                    was_latched,
+                    message.data,
+                )
+            )
+            if self.full_horizontal_control_latched and not was_latched:
+                self._event(
+                    "horizontal_control_handoff",
+                    executor_state=message.data,
+                )
 
     def _on_planner_state(self, message):
         self.planner_state = message.data
@@ -746,6 +770,14 @@ class HoverProbe(Node):
         return gates, details
 
     def _set_phase(self, phase):
+        if phase == "FIXED_STEP":
+            self.full_horizontal_control_latched = (
+                update_full_horizontal_control_latch(
+                    self.full_horizontal_control_latched,
+                    self.executor_state,
+                    reset=True,
+                )
+            )
         self.phase = phase
         self.phase_started = self._now()
         self.phase_started_sim_ns = self.clock_last_ns
@@ -887,9 +919,7 @@ class HoverProbe(Node):
                 else float("nan")
             ),
             self.home_raw[2] if self.home_raw is not None else float("nan"),
-            full_horizontal_control=full_horizontal_control_available(
-                self.executor_state
-            ),
+            full_horizontal_control=self.full_horizontal_control_latched,
         )
         if recoverable:
             self.abort_return_altitude = max(
@@ -1085,9 +1115,7 @@ class HoverProbe(Node):
             )
             drop_below_home = max(0.0, self.home_raw[2] - self.raw_position[2])
             max_tilt = max(abs(self.raw_roll), abs(self.raw_pitch))
-            full_horizontal_control = full_horizontal_control_available(
-                self.executor_state
-            )
+            full_horizontal_control = self.full_horizontal_control_latched
             max_horizontal_displacement = fixed_step_horizontal_limit(
                 full_horizontal_control,
                 self.fixed_guided_horizontal_limit_m,

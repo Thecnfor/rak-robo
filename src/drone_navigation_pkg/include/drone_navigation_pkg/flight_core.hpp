@@ -58,6 +58,10 @@ bool fixedSetpointReady(
   double setpoint_age_seconds,
   double timeout_seconds);
 
+std::uint64_t nextMonotonicTimestampMicros(
+  std::uint64_t proposed_timestamp,
+  std::uint64_t previous_timestamp);
+
 std::optional<bool> boolTokenValue(
   const std::string & text,
   const std::string & key);

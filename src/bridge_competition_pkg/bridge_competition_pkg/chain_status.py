@@ -74,24 +74,55 @@ class _BoolSubscriber(Node):
         self.latest = message.data
 
 
+def _node_path(endpoint) -> str:
+    """Mirror interface_audit._node_path so the FMU writer check matches."""
+    namespace = endpoint.node_namespace.rstrip('/')
+    return f'{namespace}/{endpoint.node_name}' if namespace else f'/{endpoint.node_name}'
+
+
 def _evaluate(ros_distro: str | None = None) -> dict:
     rclpy.init()
     try:
         node = rclpy.create_node('chain_status_audit')
         executor = SingleThreadedExecutor()
-        executor.add_node(node)
+
+        # Discovery spin: get_topic_names_and_types() and the publisher/subscriber
+        # introspection need ~1.5 s of executor cycles to see all DDS peers
+        # (uXRCE-DDS, Isaac/Pegasus, host chain) on domain 45.
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            executor.spin_once(timeout_sec=0.05)
         graph_types = dict(node.get_topic_names_and_types())
         publishers_by_topic: Dict[str, List[str]] = {}
         subscribers_by_topic: Dict[str, List[str]] = {}
-        for required in DEFAULT_REQUIRED:
-            actual = resolve_actual_topic(required, graph_types)
-            pubs = node.get_publishers_info_by_topic(actual)
-            subs = node.get_subscriptions_info_by_topic(actual)
-            publishers_by_topic[required] = [
-                endpoint.node_name for endpoint in pubs]
-            subscribers_by_topic[required] = [
-                endpoint.node_name for endpoint in subs if
-                endpoint.node_name != node.get_name()]
+        resolved_required = {
+            required: resolve_actual_topic(required, graph_types)
+            for required in DEFAULT_REQUIRED
+        }
+        # Key the publisher/subscriber maps by the *resolved* topic name so
+        # versioned aliases (e.g. ``vehicle_status_v1``) are not flagged as
+        # unpublished despite having live publishers.
+        publishers_by_topic = {
+            resolved_required[required]: [
+                _node_path(endpoint) for endpoint in pubs]
+            for required in DEFAULT_REQUIRED
+            for pubs in [node.get_publishers_info_by_topic(
+                resolve_actual_topic(required, graph_types))]
+        }
+        subscribers_by_topic = {
+            resolved_required[required]: [
+                _node_path(endpoint) for endpoint in subs
+                if endpoint.node_name != node.get_name()
+            ]
+            for required in DEFAULT_REQUIRED
+            for subs in [node.get_subscriptions_info_by_topic(
+                resolve_actual_topic(required, graph_types))]
+        }
+        # Mirror under the required name for the unversioned-fallback path
+        # in evaluate_interface._lookup.
+        for required, actual in resolved_required.items():
+            if actual != required and required not in publishers_by_topic:
+                publishers_by_topic[required] = publishers_by_topic[actual]
         summary = evaluate_interface(
             DEFAULT_REQUIRED,
             graph_types,
@@ -123,7 +154,7 @@ def _evaluate(ros_distro: str | None = None) -> dict:
             executor.spin_once(timeout_sec=0.05)
         for topic, sub in observers:
             snapshot['topics'][topic] = sub.latest
-        for sub in observers:
+        for _, sub in observers:
             sub.destroy_node()
         node.destroy_node()
         return {'summary': summary, 'live': snapshot}

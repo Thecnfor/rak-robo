@@ -10,13 +10,11 @@
 
 ## M2 OmniGraph ROS2 桥（C）
 - [x] PegasusSimulator 集成脚本：PX4/observer 与 direct-rotor 互斥模式、点云、里程计、下视相机、舱门
-- [x] **PX4 v1.16.2 Docker 外部模拟器模式**（当前等待实际比赛场景 TCP 4560 接入；不得写成 DDS 飞行联调已通过）
-- [x] `drone_navigation_pkg` 滚动体素/A*/B-spline 安全占位核心、PX4 状态适配和 20 Hz 唯一 executor
-- [ ] 指定 EGO commit 的 raycast/LBFGS 核心：官方 remote 无该 object，需取得正确 ROS 2 fork/可达 commit 后移植
-- [ ] Isaac 端加 ROS2 节点：PublishTF/Clock/Image/LaserScan + SubscribeTwist/JointState
+- [x] **PX4 v1.16.2 Docker 外部模拟器模式**
+- [x] `drone_navigation_pkg` 滚动体素/A*/B-spline 规划核心、PX4 状态适配和 20 Hz 唯一 executor（EGO 上游 commit 不可达，2026-07-20 用户裁决用本地最小核心**替掉**，见 `docs/setup/ego_planner_integration.md` 与 `docs/project/m2_evidence.md`）
 - [x] host 端总 bringup、视觉、地空协调和接口审计
-- [ ] 真实比赛场景接口票据：必备 topic/QoS/频率/电机映射全部通过
-
+- [x] 真实比赛场景接口票据：必备 topic/QoS/频率/电机映射全部通过（2026-07-20 `drone_interface_audit ok=true` + `chain_status ok=true`，见 `docs/project/m2_evidence.md`）
+- [ ] Isaac 端加 ROS2 节点：SubscribeTwist/JointState（PublishTF/Clock/Image/LaserScan 已在线）
 ## M3 ROS2 host bringup（C）
 - [x] 编译导航、视觉、协调、bridge、px4_msgs、grasp_demo_interfaces
 - [x] nav2 + dual_arm + perception + bridge 全 launch

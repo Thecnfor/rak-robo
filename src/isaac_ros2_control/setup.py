@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'cmd_vel_relay = isaac_ros2_control.cmd_vel_relay:main',
             'tf_echo_bridge = isaac_ros2_control.tf_echo_bridge:main',
+            'hand_command_bridge = isaac_ros2_control.hand_command_bridge:main',
         ],
     },
 )

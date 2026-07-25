@@ -1,18 +1,30 @@
 # EGO 规划集成：只用算法，不部署上游 ROS 图
 
-## 冻结决策
+## 冻结决策（2026-07-20 close-out）
+
+- 请求的上游基线 `ZJU-FAST-Lab/ego-planner` commit `23a8d5a191…` 在官方 remote
+  上 `not our ref`，2026-07-20 决定用本地最小核心**替掉**此 ticket
+  （用户裁决）。不取得可达 fork，不再回追。
+- `drone_navigation_pkg/flight_core` 的滚动体素 / 26 邻域 A* / 三次 B-spline
+  + 可行性拉伸是比赛主链规划器，**不再视为占位**。
+- 比赛文档 / 视频 / 技术报告里讲清：项目不复用 EGO 上游源码，自研最小核心
+  是最终方案，避免评委质疑"项目是不是空跑占位"。
+- 旧 ticket（"取得指定上游 commit" / "移植 raycast/LBFGS"）从
+  `docs/project/tasks_full.md` 移除。
+
+## 原始决策（2026-07-18 冻结，已废止）
 
 - 请求的上游基线：`ZJU-FAST-Lab/ego-planner` commit
   `23a8d5a191711dd65633df689bd00f55d4dea8f9`，GPL-3.0。2026-07-18
   对官方 remote 的直接 fetch 结果为 `not our ref`；在取得该 ROS 2 fork 的可达 remote
-  前，不能把当前实现标记为“已复用指定 commit”。
+  前，不能把当前实现标记为"已复用指定 commit"。
 - 不启动上游 launch、swarm、SO3 controller、模拟器、topic 或 TF。
 - 算法和 ROS/PX4 边界统一放在 GPL-3.0 的 `drone_navigation_pkg`。
 - `bridge_competition_pkg` 只负责 bringup、接口审计和 direct-rotor 烟测。
 - `/fmu/in/*` 只能由 `trajectory_executor` 写。
 
-这修正了旧文档中“EGO 放进 bridge”“`vehicle_status_v1`”“1 Hz 心跳”和
-“EGO 直接出电机转速”等偏差。
+这修正了旧文档中"EGO 放进 bridge""`vehicle_status_v1`""1 Hz 心跳"和
+":EGO 直接出电机转速"等偏差。
 
 ## 当前实现边界
 
