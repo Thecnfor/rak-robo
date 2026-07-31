@@ -5,21 +5,44 @@
     base_frame: drone_base_link
     voxel_resolution: 0.10
     obstacle_inflation: 0.25
-    obstacle_memory_seconds: 1.0
+    # RTX LiDAR is ~3.5 Hz in wall time, while accelerated simulation advances
+    # as much as 2.27 simulated seconds between clouds. Preserve one complete
+    # scan interval plus margin so the rolling obstacle map does not empty.
+    obstacle_memory_seconds: 4.0
     local_horizontal_range: 5.5
     local_vertical_range: 4.5
     virtual_ceiling: 2.9
     max_velocity: 0.3
     max_acceleration: 0.6
+    # Safe fallback when a smoothed B-spline cuts an otherwise collision-free
+    # A* corner. Every A* vertex is retained and traversed at this lower speed.
+    polyline_fallback_speed: 0.15
     takeoff_height: 1.8
     # PX4 external-sim odometry is nominally 5 Hz but showed 0.38 s p99 wall
     # gaps and one 1.372 s tail event under RTX capture load. Keep the early
     # HOLD gate unchanged and allow only 128 ms margin before terminal LAND.
     odometry_hold_timeout: 0.60
     data_land_timeout: 1.5
-    planner_map_timeout: 0.60
+    # This timeout is evaluated in simulation time inside the planner. The
+    # supervisor still enforces the independent 0.60 s steady-clock sensor
+    # watchdog below, so raising this value does not weaken loss-of-data safety.
+    planner_map_timeout: 3.0
+    # Bound worst-case A* latency so sensor callbacks and watchdog state stay live.
+    max_expanded_voxels: 200000
+    # Bounded weighted A*: reach useful local detours before the real-time budget expires.
+    heuristic_weight: 1.5
+    # Pegasus publishes the lidar sample about one physics tick before dynamic TF.
+    pointcloud_tf_tolerance: 0.10
+    # Preserve the phase-change replacement token across late old-goal samples.
+    phase_trajectory_endpoint_tolerance: 0.05
+    return_altitude_preemption_margin: 0.10
     fixed_setpoint_timeout: 0.60
     fixed_setpoint_topic: /drone/navigation/fixed_setpoint
+    # Simulation-only physical witness for guide release, prearm agreement and
+    # precision touchdown. It does not publish a PX4 setpoint, but it does gate
+    # the guided XY handoff and supplies the final low-speed return correction.
+    # Confirm this simulator-truth dependency is allowed before submission.
+    fixed_truth_pose_topic: /drone0/state/pose
     actuator_motors_topic: /fmu/out/actuator_motors
     actuator_acceptance_timeout: 0.30
     # PX4 v1.16 default DDS does not publish actuator_motors. Keep false and
@@ -36,12 +59,17 @@
     # commands zero yaw rate; full XY/yaw control captures the current heading
     # at release and reverts before descending into the guide.
     fixed_vertical_only_diagnostic: false
-    # The physical lateral guide ends at +0.05 m. The 2026-07-23 ULog showed
-    # only 2.5 mm XY drift at +0.03 m, but 10.2 mm at +0.04 m and another
-    # executor cycle before finite XY setpoints arrived. Hand over at +0.03 m
-    # so PX4 has 20 mm of guide height to establish horizontal control.
-    fixed_vertical_release_clearance: 0.03
-    fixed_vertical_reengage_clearance: 0.02
+    # Competition takeoff uses the same measured guide handoff as the proven
+    # fixed probe: Z-only until +5 mm physical separation, then bumpless XYZ.
+    guided_takeoff_vertical_only: true
+    # The 10 mm physical guide remains as a fail-closed stop, but full XY
+    # control engages after +5 mm of vertical separation, before lateral drift
+    # can reach a wall. At handoff the executor captures the live PX4 XY
+    # estimate and blends it back to the requested target over one simulated
+    # second, preventing stored estimator error from producing an impulse.
+    fixed_vertical_release_clearance: 0.005
+    fixed_vertical_reengage_clearance: 0.003
+    fixed_handoff_xy_blend_seconds: 1.0
     fixed_vertical_guide_height: 0.05
     fixed_vertical_minimum_handoff_lead: 0.005
     # The main body has 5 mm physical clearance to each wall. Require a
@@ -50,6 +78,9 @@
     offboard_prestream_seconds: 1.0
     # A 5 s takeoff spline reaches only 2 cm at t=1 s. Do not let the 5 Hz
     # rolling replanner repeatedly restart it before meaningful progress.
+    # Same-goal replans remain pinned through the active endpoint so repeated
+    # zero-speed restarts cannot stall flight. Phase changes, NO_PATH recovery
+    # and unsafe return-altitude corrections have dedicated preemption paths.
     minimum_replan_execution_seconds: 4.0
     ground_disarm_delay_seconds: 2.0
     px4_map_origin: [4.55, -0.38, 1.13]
@@ -63,6 +94,47 @@
     # truth pose. This prevents rate-integrator windup against the launch cage.
     prearm_attitude_tolerance_deg: 0.5
     mission_autostart: false
-    drop_search_pose: [0.0, 0.0, 1.8]
+    # Runtime scoring target in integrated_runtime/config.py:
+    # center=(5.5,-3.5), radius=0.25 m. The coarse pose stays high enough for
+    # obstacle clearance and lets the down camera see the entire plain circle.
+    drop_search_pose: [5.5, -3.5, 1.8]
     drop_min_height: 1.6
     drop_max_height: 2.0
+    visual_offset_threshold: 0.04
+    visual_alignment_seconds: 0.8
+    # Hold the last valid circle briefly across isolated RTX render misses.
+    # Invalid frames never refresh this timer.
+    visual_target_loss_grace_seconds: 0.6
+    visual_kp: 0.25
+    visual_max_velocity: 0.20
+    payload_release_settle_seconds: 2.0
+    # Hold the outbound flight altitude across the entire obstacle field. Only
+    # descend after entering the small horizontal cylinder over the launch guide.
+    return_transit_clearance: 0.67
+    return_approach_clearance: 0.055
+    # Keep transit altitude until centered over the guide; only the precision
+    # loop may descend inside this radius.
+    return_descent_radius: 0.02
+    # Reverse the proven outbound opening instead of asking each rolling map
+    # revision to rediscover which side of the long partition to choose.
+    # EGO still collision-checks and plans both legs.
+    return_transit_waypoint: [5.5, -1.7, 1.8]
+    return_transit_waypoint_radius: 0.15
+    return_transit_waypoint_vertical_tolerance: 0.15
+    # The inflated voxel map correctly rejects the launch fixture itself.
+    # Stop EGO outside that inflated volume, then use the bounded precision loop.
+    return_approach_pose: [4.55, -0.75, 1.8]
+    # Gain 1 maps the truth-frame home point into navigation coordinates once;
+    # larger gains over-correct when executor replacement waits for endpoints.
+    return_truth_xy_gain: 1.0
+    # The launch guide has 10 mm body clearance; require 2 mm margin before
+    # releasing PX4 LAND so the airframe enters it without clipping an edge.
+    return_horizontal_tolerance: 0.008
+    return_max_speed: 0.05
+    # EGO owns the long return. Inside this radius a low-speed truth-referenced
+    # velocity loop aligns with the launch guide before PX4 LAND.
+    return_fine_radius: 0.45
+    return_fine_kp: 0.4
+    return_fine_max_velocity: 0.08
+    return_fine_max_vertical_velocity: 0.05
+    return_goal_update_seconds: 0.5

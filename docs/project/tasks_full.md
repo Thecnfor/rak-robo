@@ -45,8 +45,20 @@
 
 ## M9 集成测试（A）
 - [x] M9.5 /demo_detect_object → 检测出 pencil（已验证：result.success=true detected_class=pencil）
-- [ ] M9.1 World.play() → host topic 全在
+- [x] M9.1 World.play() → host topic 全在（2026-07-31
+  `/tmp/stage2_interface_1500.json`: `ok=true`、missing/unpublished 均为空、
+  `/fmu/in/*` 唯一写入者通过）
 - [ ] M9.2 cmd_vel → X1 动
 - [ ] M9.3 hand_command → 双臂 + 双夹爪动
-- [ ] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land（2026-07-22 可见无人机已多次受控起降；最终安全构建的 `round1i` 探针 `success=true`，正式 1.8 m/30 s 与重复稳定性仍待验收，见 `drone_hover_evidence_2026-07-22.json`）
-- [ ] M9.6 全流程一镜到底
+- [x] M9.4 PX4 Offboard 预流→解锁→起飞→悬停→Land（1.8 m/30 s HOLD 与
+  2026-07-31 完整任务均通过，最终 `landed=true`、`armed=false`、`COMPLETE`）
+- [ ] M9.6 全流程一镜到底（无人机赛段二单轮已连续跑通；仍需接真实地面赛段并录制
+  符合提交要求的一镜到底视频）
+- [x] M9.7 无人机赛段二完整流程单轮基线（rosbag
+  `bags/stage2_fullflow_20260731_1500`：投放误差 1.27 cm、返航远场最低
+  1.772 m、Land 交接误差约 5.46 mm、PX4 failsafe 0 次；摘要见
+  `drone_stage2_fullflow_evidence_2026-07-31.json`）
+- [ ] M9.8 无人机正式重复验收（10 次连续无碰撞；至少 90% 投放误差 ≤0.2 m）
+- [ ] M9.9 无人机比赛合规/动态安全收口（确认 `/drone0/state/pose` 可用于导轨释放与
+  精准返架，或改用允许的视觉/测距定位；增加显式 `ACTIVE_OBSTACLE_REPLAN` 抢占并
+  完成新出现障碍换轨实景回归；核查并收敛单轮 `0.606 m/s` 真值速度峰值）

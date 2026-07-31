@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -94,6 +95,60 @@ RosOdometrySample px4NedFrdToRosEnuFlu(const Px4OdometrySample & sample);
 Vec3 enuToNed(const Vec3 & value);
 double yawEnuToNed(double yaw_enu);
 
+Vec3 visualAlignmentVelocityEnu(
+  double normalized_image_x,
+  double normalized_image_y,
+  double vehicle_yaw_enu,
+  double proportional_gain,
+  double maximum_speed);
+
+bool visualTargetRecent(
+  bool have_valid_detection,
+  double valid_detection_age_seconds,
+  double loss_grace_seconds);
+
+Vec3 positionAlignmentVelocityEnu(
+  const Vec3 & current_position,
+  const Vec3 & target_position,
+  double proportional_gain,
+  double maximum_horizontal_speed,
+  double maximum_vertical_speed);
+
+Vec3 rawErrorCorrectedNavigationTarget(
+  const Vec3 & raw_target,
+  const Vec3 & raw_position,
+  const Vec3 & navigation_position,
+  double horizontal_gain);
+
+Vec3 stagedReturnRawTarget(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  double transit_clearance,
+  double approach_clearance,
+  double descent_radius);
+
+bool returnTransitWaypointReached(
+  const Vec3 & raw_position,
+  const Vec3 & transit_waypoint,
+  double horizontal_tolerance,
+  double vertical_tolerance);
+
+bool returnFineAlignmentReady(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  double horizontal_radius);
+
+Vec3 returnRouteRawTarget(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  const Vec3 & transit_waypoint,
+  const Vec3 & approach_waypoint,
+  bool transit_waypoint_reached,
+  double fine_alignment_radius,
+  double transit_clearance,
+  double approach_clearance,
+  double descent_radius);
+
 enum class ExecutorSafetyAction {CONTINUE, HOLD, LAND};
 
 ExecutorSafetyAction executorSafetyAction(
@@ -103,6 +158,30 @@ ExecutorSafetyAction executorSafetyAction(
   double trajectory_age_seconds,
   double hold_timeout_seconds,
   double land_timeout_seconds);
+
+double trajectoryControlSourceAge(
+  bool have_trajectory,
+  bool trajectory_started,
+  double trajectory_receipt_age_seconds);
+
+double trajectoryReplacementDelay(
+  double configured_minimum_seconds,
+  double active_trajectory_duration_seconds);
+
+bool trajectoryMinimumAltitudeImproves(
+  double current_minimum_altitude,
+  double incoming_minimum_altitude,
+  double required_improvement);
+
+bool plannerRecoveryAllowsTrajectoryReplacement(
+  const std::string & previous_state,
+  const std::string & current_state);
+
+bool forcedTrajectoryEndpointChanged(
+  bool have_current_trajectory,
+  const Vec3 & current_endpoint,
+  const Vec3 & incoming_endpoint,
+  double endpoint_tolerance);
 
 bool operatorArmRequestAllowed(
   bool have_goal,
@@ -177,6 +256,12 @@ bool forceDisarmBypassesLandLatch(
   bool land_latched,
   const std::string & operator_mode);
 
+bool armCommandAllowed(
+  bool arm_requested,
+  bool preflight_accepted,
+  bool failsafe,
+  double previous_command_age_seconds);
+
 ExecutorRequestedMode reduceExecutorRequest(
   ExecutorRequestedMode current,
   ExecutorRequestedMode incoming,
@@ -224,6 +309,8 @@ struct PlannerConfig
   double virtual_ceiling{2.9};
   double max_velocity{0.5};
   double max_acceleration{1.0};
+  std::size_t max_expanded_voxels{50000};
+  double heuristic_weight{1.5};
 };
 
 class RollingVoxelMap
@@ -264,6 +351,18 @@ struct TrajectoryState
   double yaw{0.0};
 };
 
+struct TimedTrajectoryState
+{
+  double time_from_start_seconds{0.0};
+  TrajectoryState state;
+};
+
+std::vector<TimedTrajectoryState> sampleCollisionFreePolyline(
+  const std::vector<Vec3> & waypoints,
+  double sample_period_seconds,
+  double maximum_speed,
+  double maximum_acceleration);
+
 struct PositionControlSetpoint
 {
   std::array<double, 3> position;
@@ -285,11 +384,18 @@ bool verticalOnlyDiagnosticActive(
   double release_clearance_m,
   double reengage_clearance_m);
 
+double trustedLiftClearance(
+  double estimated_clearance_m,
+  bool truth_valid,
+  double truth_clearance_m);
+
 bool verticalOnlyHandoffConfigurationSafe(
   double release_clearance_m,
   double reengage_clearance_m,
   double physical_guide_height_m,
   double minimum_handoff_lead_m);
+
+double fixedHandoffBlendScale(double elapsed_seconds, double blend_seconds);
 
 class UniformBsplineTrajectory
 {
@@ -322,6 +428,10 @@ enum class FlightPhase
   HOLD,
 };
 
+bool shouldResetReturnTransitWaypoint(
+  FlightPhase previous_phase,
+  FlightPhase current_phase);
+
 std::string toString(FlightPhase phase);
 
 struct SupervisorInputs
@@ -338,6 +448,7 @@ struct SupervisorInputs
   bool target_visible{false};
   bool target_aligned{false};
   bool payload_released{false};
+  bool drop_release_settled{false};
   bool at_home{false};
   bool landed{false};
   double odometry_age_seconds{0.0};
@@ -365,6 +476,7 @@ public:
 
 private:
   FlightPhase phase_{FlightPhase::IDLE};
+  FlightPhase resume_phase_{FlightPhase::IDLE};
 };
 
 }  // namespace drone_navigation

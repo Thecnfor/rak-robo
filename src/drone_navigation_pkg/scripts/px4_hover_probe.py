@@ -46,15 +46,20 @@ from hover_probe_core import (
     abort_return_allowed,
     actuator_outputs_saturated,
     advance_fixed_step,
-    cradle_touchdown_target,
+    cradle_approach_target,
     crashed_airframe_force_disarm_ready,
+    fixed_clearance_sequence_valid,
     fixed_step_envelope_safe,
     fixed_step_horizontal_limit,
     fixed_step_reached,
+    freeze_landing_frame_offset,
     ground_observation_usable,
     guided_touchdown_reached,
     hold_acceptance_passes,
+    landing_frame_capture_action,
+    landing_nav_target,
     landing_approach_target,
+    low_pass_frame_offset,
     normalized_node_names,
     parse_bool_token,
     phase_elapsed_seconds,
@@ -110,6 +115,11 @@ class HoverProbe(Node):
                 "fixed_step_clearances", [0.10, 0.20]
             ).value
         )
+        self.fixed_authorized_max_clearance = float(
+            self.declare_parameter(
+                "fixed_authorized_max_clearance", 0.30
+            ).value
+        )
         self.fixed_hold_altitude = float(
             self.declare_parameter("fixed_hold_altitude", 1.30).value
         )
@@ -117,7 +127,7 @@ class HoverProbe(Node):
             self.declare_parameter("fixed_step_settle_seconds", 2.0).value
         )
         self.fixed_step_timeout = float(
-            self.declare_parameter("fixed_step_timeout", 15.0).value
+            self.declare_parameter("fixed_step_timeout", 30.0).value
         )
         self.fixed_target_horizontal_tolerance = float(
             self.declare_parameter("fixed_target_horizontal_tolerance", 0.10).value
@@ -130,6 +140,11 @@ class HoverProbe(Node):
         )
         self.fixed_step_max_tilt_deg = float(
             self.declare_parameter("fixed_step_max_tilt_deg", 15.0).value
+        )
+        self.fixed_hold_entry_max_speed_mps = float(
+            self.declare_parameter(
+                "fixed_hold_entry_max_speed_mps", 0.04
+            ).value
         )
         self.fixed_guided_horizontal_limit_m = float(
             self.declare_parameter(
@@ -146,7 +161,12 @@ class HoverProbe(Node):
         )
         self.cradle_touchdown_horizontal_tolerance = float(
             self.declare_parameter(
-                "cradle_touchdown_horizontal_tolerance", 0.004
+                "cradle_touchdown_horizontal_tolerance", 0.008
+            ).value
+        )
+        self.cradle_approach_clearance = float(
+            self.declare_parameter(
+                "cradle_approach_clearance", 0.055
             ).value
         )
         landing_half_extents = tuple(
@@ -195,6 +215,36 @@ class HoverProbe(Node):
         self.landing_return_timeout = float(
             self.declare_parameter("landing_return_timeout", 15.0).value
         )
+        self.live_frame_offset_time_constant_seconds = float(
+            self.declare_parameter(
+                "live_frame_offset_time_constant_seconds", 2.0
+            ).value
+        )
+        self.live_frame_offset_maximum_rate_mps = float(
+            self.declare_parameter(
+                "live_frame_offset_maximum_rate_mps", 0.02
+            ).value
+        )
+        self.landing_frame_capture_radius_m = float(
+            self.declare_parameter(
+                "landing_frame_capture_radius_m", 0.008
+            ).value
+        )
+        self.landing_frame_release_radius_m = float(
+            self.declare_parameter(
+                "landing_frame_release_radius_m", 0.012
+            ).value
+        )
+        self.landing_frame_capture_max_speed_mps = float(
+            self.declare_parameter(
+                "landing_frame_capture_max_speed_mps", 0.01
+            ).value
+        )
+        self.landing_truth_xy_gain = float(
+            self.declare_parameter(
+                "landing_truth_xy_gain", 2.0
+            ).value
+        )
         spawn = list(
             self.declare_parameter(
                 "prearm_spawn_position", [4.55, -0.38, 1.13]
@@ -240,20 +290,12 @@ class HoverProbe(Node):
             or self.prearm_limits.max_speed_mps < 0.0
             or self.prearm_limits.max_tilt_deg < 0.0
             or self.prearm_attitude_tolerance_deg < 0.0
-            or not self.fixed_step_clearances
-            or any(
-                clearance <= 0.0 or clearance > 0.30
-                for clearance in self.fixed_step_clearances
+            or not fixed_clearance_sequence_valid(
+                self.fixed_step_clearances,
+                self.fixed_hold_altitude,
+                self.prearm_limits.expected_position[2],
+                self.fixed_authorized_max_clearance,
             )
-            or any(
-                later <= earlier
-                for earlier, later in zip(
-                    self.fixed_step_clearances,
-                    self.fixed_step_clearances[1:],
-                )
-            )
-            or self.fixed_hold_altitude <= self.prearm_limits.expected_position[2]
-            or self.fixed_hold_altitude > self.prearm_limits.expected_position[2] + 0.30
             or self.fixed_step_settle_seconds <= 0.0
             or self.fixed_step_timeout <= 0.0
             or self.fixed_target_horizontal_tolerance <= 0.0
@@ -261,15 +303,48 @@ class HoverProbe(Node):
             or not (
                 0.0
                 < self.cradle_touchdown_horizontal_tolerance
-                <= 0.004
-            )
-            or (
-                self.cradle_touchdown_horizontal_tolerance
-                > self.prearm_limits.position_tolerance_m
+                <= 0.008
             )
             or self.fixed_step_max_speed_mps <= 0.0
             or self.fixed_step_max_tilt_deg <= 0.0
+            or not (
+                0.0
+                < self.fixed_hold_entry_max_speed_mps
+                < 0.05
+            )
+            or not (
+                0.0
+                < self.cradle_approach_clearance
+                <= self.fixed_step_clearances[-1]
+            )
             or self.landing_return_timeout <= 0.0
+            or not math.isfinite(
+                self.live_frame_offset_time_constant_seconds
+            )
+            or self.live_frame_offset_time_constant_seconds <= 0.0
+            or not math.isfinite(
+                self.live_frame_offset_maximum_rate_mps
+            )
+            or self.live_frame_offset_maximum_rate_mps <= 0.0
+            or not (
+                0.0
+                < self.landing_frame_capture_radius_m
+                <= self.cradle_touchdown_horizontal_tolerance
+            )
+            or not (
+                self.landing_frame_capture_radius_m
+                < self.landing_frame_release_radius_m
+                <= self.fixed_guided_horizontal_limit_m
+            )
+            or not (
+                0.0
+                < self.landing_frame_capture_max_speed_mps
+                <= 0.05
+            )
+            or not (
+                math.isfinite(self.landing_truth_xy_gain)
+                and 0.0 < self.landing_truth_xy_gain <= 3.0
+            )
             or not self.landing_region.valid()
             or not 0.0 < self.actuator_saturation_threshold <= 1.0
             or self.actuator_acceptance_timeout <= 0.0
@@ -390,10 +465,17 @@ class HoverProbe(Node):
         self.raw_roll = 0.0
         self.raw_pitch = 0.0
         self.nav_position = None
+        self.nav_stamp_ns = None
         self.nav_roll = None
         self.nav_pitch = None
         self.home_nav = None
         self.home_raw = None
+        self.live_frame_offset = None
+        self.live_frame_offset_stamp_ns = None
+        self.landing_frame_offset = None
+        self.landing_frame_capture_count = 0
+        self.landing_frame_release_count = 0
+        self.return_min_horizontal_error_m = float("inf")
         self.goal_stable_since = None
         self.goal_stable_since_sim_ns = None
         self.vehicle_status = None
@@ -503,6 +585,35 @@ class HoverProbe(Node):
     def _on_navigation_odometry(self, message):
         position = message.pose.pose.position
         self.nav_position = (position.x, position.y, position.z)
+        stamp = message.header.stamp
+        self.nav_stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+        if (
+            self.home_nav is not None
+            and self.home_raw is not None
+            and self.raw_position is not None
+        ):
+            observed_offset = tuple(
+                self.nav_position[index] - self.raw_position[index]
+                for index in range(3)
+            )
+            if self.live_frame_offset is None:
+                self.live_frame_offset = observed_offset
+                self.live_frame_offset_stamp_ns = self.nav_stamp_ns
+            elif (
+                self.live_frame_offset_stamp_ns is not None
+                and self.nav_stamp_ns > self.live_frame_offset_stamp_ns
+            ):
+                elapsed_seconds = (
+                    self.nav_stamp_ns - self.live_frame_offset_stamp_ns
+                ) / 1_000_000_000.0
+                self.live_frame_offset = low_pass_frame_offset(
+                    self.live_frame_offset,
+                    observed_offset,
+                    elapsed_seconds,
+                    self.live_frame_offset_time_constant_seconds,
+                    self.live_frame_offset_maximum_rate_mps,
+                )
+                self.live_frame_offset_stamp_ns = self.nav_stamp_ns
         orientation = message.pose.pose.orientation
         self.nav_roll, self.nav_pitch = quaternion_roll_pitch_degrees(
             orientation.x, orientation.y, orientation.z, orientation.w
@@ -796,14 +907,18 @@ class HoverProbe(Node):
             )
         return now - self.phase_started
 
-    def _fixed_target_errors(self, target):
+    def _fixed_target_errors(self, target, acceptance_raw_target=None):
         if (
             self.raw_position is None
             or self.home_raw is None
             or self.home_nav is None
         ):
             return float("inf"), float("inf")
-        raw_target = self._raw_target_from_nav(target)
+        raw_target = (
+            tuple(acceptance_raw_target)
+            if acceptance_raw_target is not None
+            else self._raw_target_from_nav(target)
+        )
         return (
             math.hypot(
                 self.raw_position[0] - raw_target[0],
@@ -822,8 +937,111 @@ class HoverProbe(Node):
             tuple(target), self.home_nav, self.home_raw
         )
 
-    def _fixed_target_settled(self, target, now, guided_touchdown=False):
-        horizontal_error, altitude_error = self._fixed_target_errors(target)
+    def _live_nav_target_from_raw(self, target):
+        if self.live_frame_offset is None:
+            return self._nav_target_from_raw(target)
+        return tuple(
+            target[index] + self.live_frame_offset[index]
+            for index in range(3)
+        )
+
+    def _landing_nav_target_from_raw(self, target):
+        if self.raw_position is None:
+            return self._live_nav_target_from_raw(target)
+        horizontal_error = math.hypot(
+            self.raw_position[0] - target[0],
+            self.raw_position[1] - target[1],
+        )
+        self.return_min_horizontal_error_m = min(
+            self.return_min_horizontal_error_m,
+            horizontal_error,
+        )
+        action = landing_frame_capture_action(
+            self.landing_frame_offset is not None,
+            horizontal_error,
+            self.raw_speed,
+            self.landing_frame_capture_radius_m,
+            self.landing_frame_release_radius_m,
+            self.landing_frame_capture_max_speed_mps,
+        )
+        if action == "release":
+            released_offset = self.landing_frame_offset
+            self.landing_frame_offset = None
+            self.landing_frame_release_count += 1
+            self.fixed_settle_since = None
+            self.fixed_settle_since_sim_ns = None
+            self._event(
+                "landing_frame_offset_released",
+                offset=released_offset,
+                horizontal_error_m=horizontal_error,
+                raw_position=self.raw_position,
+                raw_speed_mps=self.raw_speed,
+                capture_max_speed_mps=(
+                    self.landing_frame_capture_max_speed_mps
+                ),
+                truth_xy_gain=self.landing_truth_xy_gain,
+                round=self.current_round,
+            )
+        elif action == "capture":
+            if self.nav_position is not None:
+                live_target = landing_nav_target(
+                    tuple(target),
+                    tuple(self.raw_position),
+                    tuple(self.nav_position),
+                    None,
+                    self.landing_truth_xy_gain,
+                )
+                self.landing_frame_offset = tuple(
+                    live_target[index] - target[index]
+                    for index in range(3)
+                )
+            else:
+                self.landing_frame_offset = freeze_landing_frame_offset(
+                    None,
+                    self.live_frame_offset,
+                    self.home_raw,
+                    self.home_nav,
+                )
+            self.landing_frame_capture_count += 1
+            self._event(
+                "landing_frame_offset_captured",
+                offset=self.landing_frame_offset,
+                horizontal_error_m=horizontal_error,
+                raw_position=self.raw_position,
+                raw_speed_mps=self.raw_speed,
+                capture_max_speed_mps=(
+                    self.landing_frame_capture_max_speed_mps
+                ),
+                round=self.current_round,
+            )
+        if self.nav_position is not None:
+            return landing_nav_target(
+                tuple(target),
+                tuple(self.raw_position),
+                tuple(self.nav_position),
+                self.landing_frame_offset,
+                self.landing_truth_xy_gain,
+            )
+        offset = freeze_landing_frame_offset(
+            self.landing_frame_offset,
+            self.live_frame_offset,
+            self.home_raw,
+            self.home_nav,
+        )
+        return tuple(target[index] + offset[index] for index in range(3))
+
+    def _fixed_target_settled(
+        self,
+        target,
+        now,
+        guided_touchdown=False,
+        max_speed_mps=0.05,
+        acceptance_raw_target=None,
+    ):
+        horizontal_error, altitude_error = self._fixed_target_errors(
+            target,
+            acceptance_raw_target=acceptance_raw_target,
+        )
         if guided_touchdown:
             reached = guided_touchdown_reached(
                 horizontal_error,
@@ -831,6 +1049,7 @@ class HoverProbe(Node):
                 self.raw_speed,
                 guide_radius_m=self.cradle_touchdown_horizontal_tolerance,
                 altitude_tolerance_m=self.fixed_target_altitude_tolerance,
+                max_speed_mps=max_speed_mps,
             )
         else:
             reached = fixed_step_reached(
@@ -839,6 +1058,7 @@ class HoverProbe(Node):
                 self.raw_speed,
                 horizontal_tolerance_m=self.fixed_target_horizontal_tolerance,
                 altitude_tolerance_m=self.fixed_target_altitude_tolerance,
+                max_speed_mps=max_speed_mps,
             )
         if reached:
             if self.fixed_settle_since is None:
@@ -864,12 +1084,30 @@ class HoverProbe(Node):
             ages,
             self.flight_data_timeout,
             self.flight_clock_timeout,
+            ignored_topics=(
+                ("pointcloud", "planner_state")
+                if self.fixed_setpoint_diagnostic
+                else ()
+            ),
         )
 
     def _begin_round(self):
         self.current_round += 1
         self.home_nav = tuple(self.nav_position)
         self.home_raw = tuple(self.raw_position)
+        self.live_frame_offset = tuple(
+            self.home_nav[index] - self.home_raw[index]
+            for index in range(3)
+        )
+        self.live_frame_offset_stamp_ns = (
+            self.nav_stamp_ns
+            if self.nav_stamp_ns is not None
+            else self.clock_last_ns
+        )
+        self.landing_frame_offset = None
+        self.landing_frame_capture_count = 0
+        self.landing_frame_release_count = 0
+        self.return_min_horizontal_error_m = float("inf")
         self.round_ack_start = len(self.command_acks)
         self.commanded_goal = tuple(self.home_nav)
         self.fixed_step_index = 0
@@ -928,6 +1166,15 @@ class HoverProbe(Node):
             )
             self.fixed_settle_since = None
             self.fixed_settle_since_sim_ns = None
+            if self.landing_frame_offset is not None:
+                self._event(
+                    "landing_frame_offset_released",
+                    offset=self.landing_frame_offset,
+                    reason="abort_return",
+                    round=self.current_round,
+                )
+                self.landing_frame_offset = None
+                self.landing_frame_release_count += 1
             self._set_phase("ABORT_RETURN")
         else:
             self._set_phase("ABORT")
@@ -958,6 +1205,9 @@ class HoverProbe(Node):
             "goal_altitude": self.goal_altitude,
             "fixed_setpoint_diagnostic": self.fixed_setpoint_diagnostic,
             "fixed_step_clearances": self.fixed_step_clearances,
+            "fixed_authorized_max_clearance": (
+                self.fixed_authorized_max_clearance
+            ),
             "fixed_step_timeout": self.fixed_step_timeout,
             "fixed_target_horizontal_tolerance": (
                 self.fixed_target_horizontal_tolerance
@@ -965,6 +1215,9 @@ class HoverProbe(Node):
             "fixed_target_altitude_tolerance": self.fixed_target_altitude_tolerance,
             "fixed_step_max_speed_mps": self.fixed_step_max_speed_mps,
             "fixed_step_max_tilt_deg": self.fixed_step_max_tilt_deg,
+            "fixed_hold_entry_max_speed_mps": (
+                self.fixed_hold_entry_max_speed_mps
+            ),
             "fixed_guided_horizontal_limit_m": (
                 self.fixed_guided_horizontal_limit_m
             ),
@@ -980,6 +1233,32 @@ class HoverProbe(Node):
             "cradle_touchdown": self.cradle_touchdown,
             "cradle_touchdown_horizontal_tolerance": (
                 self.cradle_touchdown_horizontal_tolerance
+            ),
+            "cradle_approach_clearance": self.cradle_approach_clearance,
+            "live_frame_offset_time_constant_seconds": (
+                self.live_frame_offset_time_constant_seconds
+            ),
+            "live_frame_offset_maximum_rate_mps": (
+                self.live_frame_offset_maximum_rate_mps
+            ),
+            "live_frame_offset_final": self.live_frame_offset,
+            "landing_frame_offset": self.landing_frame_offset,
+            "landing_frame_capture_radius_m": (
+                self.landing_frame_capture_radius_m
+            ),
+            "landing_frame_release_radius_m": (
+                self.landing_frame_release_radius_m
+            ),
+            "landing_frame_capture_max_speed_mps": (
+                self.landing_frame_capture_max_speed_mps
+            ),
+            "landing_truth_xy_gain": self.landing_truth_xy_gain,
+            "landing_frame_capture_count": self.landing_frame_capture_count,
+            "landing_frame_release_count": self.landing_frame_release_count,
+            "return_min_horizontal_error_m": (
+                None
+                if not math.isfinite(self.return_min_horizontal_error_m)
+                else self.return_min_horizontal_error_m
             ),
             "landing_region": {
                 "center_xy": self.landing_region.center_xy,
@@ -1102,11 +1381,12 @@ class HoverProbe(Node):
                 self._abort("arming/offboard timeout")
         elif self.phase == "FIXED_STEP":
             clearance = self.fixed_step_clearances[self.fixed_step_index]
-            target = (
-                self.home_nav[0],
-                self.home_nav[1],
-                self.home_nav[2] + clearance,
+            raw_target = (
+                self.home_raw[0],
+                self.home_raw[1],
+                self.home_raw[2] + clearance,
             )
+            target = self._live_nav_target_from_raw(raw_target)
             self._command_goal(target)
             self._publish_mode("FIXED")
             horizontal_from_home = math.hypot(
@@ -1141,7 +1421,11 @@ class HoverProbe(Node):
                     f"tilt={max_tilt:.1f}deg "
                     f"tilt_limit={self.fixed_step_max_tilt_deg:.1f}deg"
                 )
-            elif self._fixed_target_settled(target, now):
+            elif self._fixed_target_settled(
+                target,
+                now,
+                acceptance_raw_target=raw_target,
+            ):
                 self._event(
                     "fixed_step_passed",
                     index=self.fixed_step_index,
@@ -1169,30 +1453,69 @@ class HoverProbe(Node):
             elif self._phase_elapsed(now, use_sim_time=True) > self.fixed_step_timeout:
                 self._abort(f"fixed step {clearance:.2f} m timeout")
         elif self.phase == "FIXED_HOLD_SETTLE":
-            target = self._nav_target_from_raw(
-                (
-                    self.home_raw[0],
-                    self.home_raw[1],
-                    self.fixed_hold_altitude,
-                )
+            raw_target = (
+                self.home_raw[0],
+                self.home_raw[1],
+                self.fixed_hold_altitude,
             )
+            target = self._live_nav_target_from_raw(raw_target)
             self._command_goal(target)
             self._publish_mode("FIXED")
-            if self._fixed_target_settled(target, now):
+            horizontal_from_home = math.hypot(
+                self.raw_position[0] - self.home_raw[0],
+                self.raw_position[1] - self.home_raw[1],
+            )
+            drop_below_home = max(0.0, self.home_raw[2] - self.raw_position[2])
+            max_tilt = max(abs(self.raw_roll), abs(self.raw_pitch))
+            if not fixed_step_envelope_safe(
+                horizontal_from_home,
+                drop_below_home,
+                self.raw_speed,
+                max_tilt,
+                max_horizontal_displacement_m=(
+                    self.fixed_full_xy_horizontal_limit_m
+                ),
+                max_speed_mps=self.fixed_step_max_speed_mps,
+                max_tilt_deg=self.fixed_step_max_tilt_deg,
+            ):
+                self._abort(
+                    "fixed hold settle safety envelope violated: "
+                    f"horizontal={horizontal_from_home:.3f}m "
+                    f"horizontal_limit={self.fixed_full_xy_horizontal_limit_m:.3f}m "
+                    f"drop={drop_below_home:.3f}m "
+                    f"speed={self.raw_speed:.3f}m/s "
+                    f"speed_limit={self.fixed_step_max_speed_mps:.3f}m/s "
+                    f"tilt={max_tilt:.1f}deg "
+                    f"tilt_limit={self.fixed_step_max_tilt_deg:.1f}deg"
+                )
+            elif self._fixed_target_settled(
+                target,
+                now,
+                max_speed_mps=self.fixed_hold_entry_max_speed_mps,
+                acceptance_raw_target=raw_target,
+            ):
                 self._set_phase("FIXED_HOLD")
             elif self._phase_elapsed(now, use_sim_time=True) > 15.0:
                 self._abort("fixed hold target timeout")
         elif self.phase == "FIXED_HOLD":
-            target = self._nav_target_from_raw(
-                (
-                    self.home_raw[0],
-                    self.home_raw[1],
-                    self.fixed_hold_altitude,
-                )
+            raw_target = (
+                self.home_raw[0],
+                self.home_raw[1],
+                self.fixed_hold_altitude,
             )
+            target = self._live_nav_target_from_raw(raw_target)
             self._command_goal(target)
             self._publish_mode("FIXED")
-            horizontal, altitude_error = self._fixed_target_errors(target)
+            horizontal, altitude_error = self._fixed_target_errors(
+                target,
+                acceptance_raw_target=raw_target,
+            )
+            horizontal_from_home = math.hypot(
+                self.raw_position[0] - self.home_raw[0],
+                self.raw_position[1] - self.home_raw[1],
+            )
+            drop_below_home = max(0.0, self.home_raw[2] - self.raw_position[2])
+            max_tilt = max(abs(self.raw_roll), abs(self.raw_pitch))
             self.hold_max_horizontal_error = max(
                 self.hold_max_horizontal_error, horizontal
             )
@@ -1200,7 +1523,28 @@ class HoverProbe(Node):
                 self.hold_max_altitude_error, altitude_error
             )
             self.hold_max_speed = max(self.hold_max_speed, self.raw_speed)
-            if not hold_acceptance_passes(
+            if not fixed_step_envelope_safe(
+                horizontal_from_home,
+                drop_below_home,
+                self.raw_speed,
+                max_tilt,
+                max_horizontal_displacement_m=(
+                    self.fixed_full_xy_horizontal_limit_m
+                ),
+                max_speed_mps=self.fixed_step_max_speed_mps,
+                max_tilt_deg=self.fixed_step_max_tilt_deg,
+            ):
+                self._abort(
+                    "fixed hold safety envelope violated: "
+                    f"horizontal={horizontal_from_home:.3f}m "
+                    f"horizontal_limit={self.fixed_full_xy_horizontal_limit_m:.3f}m "
+                    f"drop={drop_below_home:.3f}m "
+                    f"speed={self.raw_speed:.3f}m/s "
+                    f"speed_limit={self.fixed_step_max_speed_mps:.3f}m/s "
+                    f"tilt={max_tilt:.1f}deg "
+                    f"tilt_limit={self.fixed_step_max_tilt_deg:.1f}deg"
+                )
+            elif not hold_acceptance_passes(
                 horizontal,
                 altitude_error,
                 self.raw_speed,
@@ -1222,9 +1566,10 @@ class HoverProbe(Node):
                 self._set_phase("RETURN_HOME")
         elif self.phase == "RETURN_HOME":
             if self.cradle_touchdown:
-                raw_target = cradle_touchdown_target(
+                raw_target = cradle_approach_target(
                     self.landing_region,
                     self.home_raw[2],
+                    self.cradle_approach_clearance,
                 )
             else:
                 raw_target = landing_approach_target(
@@ -1232,7 +1577,7 @@ class HoverProbe(Node):
                     self.home_raw[2],
                     self.fixed_step_clearances[-1],
                 )
-            target = self._nav_target_from_raw(raw_target)
+            target = self._landing_nav_target_from_raw(raw_target)
             self._command_goal(target)
             self._publish_mode("FIXED")
             inside_region = self.landing_region.contains(tuple(self.raw_position[:2]))
@@ -1240,6 +1585,7 @@ class HoverProbe(Node):
                 target,
                 now,
                 guided_touchdown=self.cradle_touchdown,
+                acceptance_raw_target=raw_target,
             ):
                 self._set_phase("LAND")
             elif self._phase_elapsed(now, use_sim_time=True) > self.landing_return_timeout:
@@ -1432,11 +1778,13 @@ class HoverProbe(Node):
             raw_target = (
                 self.landing_region.center_xy[0],
                 self.landing_region.center_xy[1],
-                self.home_raw[2]
-                if self.cradle_touchdown
-                else self.abort_return_altitude,
+                (
+                    self.home_raw[2] + self.cradle_approach_clearance
+                    if self.cradle_touchdown
+                    else self.abort_return_altitude
+                ),
             )
-            target = self._nav_target_from_raw(raw_target)
+            target = self._landing_nav_target_from_raw(raw_target)
             self._command_goal(target)
             self._publish_mode("FIXED")
             inside_region = self.landing_region.contains(tuple(self.raw_position[:2]))
@@ -1444,6 +1792,7 @@ class HoverProbe(Node):
                 target,
                 now,
                 guided_touchdown=self.cradle_touchdown,
+                acceptance_raw_target=raw_target,
             ):
                 self._event("abort_return_ready", target=target)
                 self._set_phase("ABORT")

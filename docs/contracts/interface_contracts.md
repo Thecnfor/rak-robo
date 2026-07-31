@@ -46,6 +46,7 @@ EGO、视觉、返航和业务 action 只能提交 `/drone/navigation/*` 控制�
 | `/drone_0_ego_odom` | `nav_msgs/Odometry`, Isaac ENU 对照状态 |
 | `/drone0/down_camera/color/image_raw` | `sensor_msgs/Image`, 640×480@30 Hz 下视相机 |
 | `/cargo_bay/{command,status}` | `std_msgs/String` |
+| `/cargo_bay/payload_position` | `geometry_msgs/PointStamped`，`world` 帧；用于投放精度验收，不参与控制 |
 
 `direct_rotor` 只用于上锁/低速接口烟测，关闭 PX4 backend 后才允许写：
 

@@ -1,0 +1,66 @@
+{
+  "date": "2026-07-26",
+  "accepted": true,
+  "scope": "PX4 fixed-setpoint 1.80 m / 30 s hover, truth-guided return, landing and disarm",
+  "probe": {
+    "path": "/tmp/drone_stage2_fullheight_180m_hold30_return_20260726.json",
+    "sha256": "e38644cc93b14523d44c640ddece1606131305c4c1b5552ea1c49390056f544f",
+    "requested_rounds": 1,
+    "completed_rounds": 1,
+    "world_hold_altitude_m": 1.8,
+    "hold_duration_sim_s": 30.0,
+    "maximum_hold_horizontal_error_m": 0.0347,
+    "maximum_hold_altitude_error_m": 0.0154,
+    "maximum_hold_speed_mps": 0.0267,
+    "return_minimum_truth_horizontal_error_m": 0.0013738359421697698,
+    "landing_capture_count": 1,
+    "landing_release_count": 0,
+    "touchdown_position_enu_m": [
+      4.5408477783203125,
+      -0.3882705867290497,
+      1.1299999952316284
+    ],
+    "touchdown_center_enu_m": [
+      4.55,
+      -0.38,
+      1.13
+    ],
+    "touchdown_horizontal_error_m": 0.012334,
+    "touchdown_axis_errors_m": [
+      -0.009152,
+      -0.008271
+    ],
+    "inside_verified_support": true,
+    "successful_command_ack_count": 5
+  },
+  "px4_ulog": {
+    "path": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-26/13_32_30.ulg",
+    "sha256": "7155c72d5876560ea3334e3ffaf01ece0bcc9c47f5083b0accba7e0c5c966f34",
+    "size_bytes": 38240349,
+    "duration_s": 100.184,
+    "maximum_actual_roll_deg": 0.2403247455277809,
+    "maximum_actual_pitch_deg": 0.887601462435467,
+    "motor_absolute_maxima": [
+      0.5153550505638123,
+      0.5064838528633118,
+      0.5183266997337341,
+      0.5038469433784485
+    ],
+    "actuator_saturation": false,
+    "failsafe": false,
+    "failure_detector": false
+  },
+  "evidence_interpretation": {
+    "probe_reports_pending_audit": true,
+    "postflight_ulog_audit_passed": true,
+    "ulog_static_return_proxy_passed": false,
+    "ulog_static_return_proxy_note": "PX4 local-position replay cannot observe the Isaac-truth outer loop; simulator raw pose and verified support containment are authoritative for millimetre landing."
+  },
+  "remaining_scope": [
+    "EGO empty-space goal and return",
+    "EGO obstacle replan acceptance",
+    "visual alignment and payload drop",
+    "three EGO return repetitions",
+    "ten complete competition repetitions"
+  ]
+}

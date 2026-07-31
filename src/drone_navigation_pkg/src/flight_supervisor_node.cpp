@@ -59,10 +59,32 @@ public:
     pose_tolerance_ = declare_parameter<double>("pose_tolerance", 0.20);
     visual_offset_threshold_ = declare_parameter<double>("visual_offset_threshold", 0.04);
     visual_alignment_seconds_ = declare_parameter<double>("visual_alignment_seconds", 0.8);
+    visual_target_loss_grace_seconds_ = declare_parameter<double>(
+      "visual_target_loss_grace_seconds", 0.6);
     visual_kp_ = declare_parameter<double>("visual_kp", 0.25);
     visual_max_velocity_ = declare_parameter<double>("visual_max_velocity", 0.20);
     drop_min_height_ = declare_parameter<double>("drop_min_height", 1.6);
     drop_max_height_ = declare_parameter<double>("drop_max_height", 2.0);
+    payload_release_settle_seconds_ = declare_parameter<double>(
+      "payload_release_settle_seconds", 2.0);
+    return_transit_clearance_ = declare_parameter<double>(
+      "return_transit_clearance", 0.67);
+    return_approach_clearance_ = declare_parameter<double>(
+      "return_approach_clearance", 0.055);
+    return_descent_radius_ = declare_parameter<double>(
+      "return_descent_radius", 0.20);
+    return_truth_xy_gain_ = declare_parameter<double>("return_truth_xy_gain", 2.0);
+    return_horizontal_tolerance_ = declare_parameter<double>(
+      "return_horizontal_tolerance", 0.02);
+    return_max_speed_ = declare_parameter<double>("return_max_speed", 0.05);
+    return_fine_radius_ = declare_parameter<double>("return_fine_radius", 0.25);
+    return_fine_kp_ = declare_parameter<double>("return_fine_kp", 0.4);
+    return_fine_max_velocity_ = declare_parameter<double>(
+      "return_fine_max_velocity", 0.08);
+    return_fine_max_vertical_velocity_ = declare_parameter<double>(
+      "return_fine_max_vertical_velocity", 0.05);
+    return_goal_update_seconds_ = declare_parameter<double>(
+      "return_goal_update_seconds", 0.5);
     const auto prearm_spawn = declare_parameter<std::vector<double>>(
       "prearm_spawn_position", {4.55, -0.38, 1.13});
     if (prearm_spawn.size() != 3) {
@@ -80,8 +102,21 @@ public:
     {
       throw std::runtime_error("prearm pose limits must be non-negative");
     }
-    if (drop_min_height_ < 0.0 || drop_min_height_ > drop_max_height_) {
+    if (visual_target_loss_grace_seconds_ < 0.0 ||
+      drop_min_height_ < 0.0 || drop_min_height_ > drop_max_height_)
+    {
       throw std::runtime_error("drop height window must be non-negative and ordered");
+    }
+    if (payload_release_settle_seconds_ < 0.0 ||
+      return_transit_clearance_ <= return_approach_clearance_ ||
+      return_approach_clearance_ <= 0.0 || return_descent_radius_ <= 0.0 ||
+      return_truth_xy_gain_ <= 0.0 || return_truth_xy_gain_ > 3.0 ||
+      return_horizontal_tolerance_ <= 0.0 || return_max_speed_ <= 0.0 ||
+      return_goal_update_seconds_ <= 0.0 || return_fine_radius_ <= 0.0 ||
+      return_fine_kp_ <= 0.0 || return_fine_max_velocity_ <= 0.0 ||
+      return_fine_max_vertical_velocity_ <= 0.0)
+    {
+      throw std::runtime_error("drop and return guidance limits are invalid");
     }
     const auto search = declare_parameter<std::vector<double>>(
       "drop_search_pose", {0.0, 0.0, 1.8});
@@ -89,6 +124,39 @@ public:
       throw std::runtime_error("drop_search_pose must contain [x, y, z]");
     }
     search_pose_ = {search[0], search[1], search[2]};
+    const auto return_transit_waypoint = declare_parameter<std::vector<double>>(
+      "return_transit_waypoint", {5.5, -1.7, 1.8});
+    if (return_transit_waypoint.size() != 3) {
+      throw std::runtime_error("return_transit_waypoint must contain [x, y, z]");
+    }
+    return_transit_waypoint_ = {
+      return_transit_waypoint[0],
+      return_transit_waypoint[1],
+      return_transit_waypoint[2]};
+    const auto return_approach_pose = declare_parameter<std::vector<double>>(
+      "return_approach_pose", {4.55, -0.75, 1.8});
+    if (return_approach_pose.size() != 3) {
+      throw std::runtime_error("return_approach_pose must contain [x, y, z]");
+    }
+    return_approach_pose_ = {
+      return_approach_pose[0],
+      return_approach_pose[1],
+      return_approach_pose[2]};
+    return_transit_waypoint_radius_ = declare_parameter<double>(
+      "return_transit_waypoint_radius", 0.15);
+    return_transit_waypoint_vertical_tolerance_ = declare_parameter<double>(
+      "return_transit_waypoint_vertical_tolerance", 0.15);
+    if (return_transit_waypoint_radius_ <= 0.0 ||
+      return_transit_waypoint_vertical_tolerance_ <= 0.0)
+    {
+      throw std::runtime_error("return transit waypoint tolerances must be positive");
+    }
+    if (!returnFineAlignmentReady(
+        prearm_limits_.expected_position, return_approach_pose_, return_fine_radius_))
+    {
+      throw std::runtime_error(
+              "return_approach_pose must be inside return_fine_radius from home");
+    }
 
     state_publisher_ = create_publisher<std_msgs::msg::String>(
       "/drone/navigation/state", rclcpp::QoS(10).transient_local());
@@ -117,8 +185,12 @@ public:
     ground_subscription_ = create_subscription<std_msgs::msg::String>(
       "/arena/ground/state", rclcpp::QoS(10).transient_local(),
       [this](const std_msgs::msg::String::SharedPtr message) {
-        ground_complete_ = message->data == "COMPLETE" || message->data == "SUCCESS" ||
-        message->data == "GROUND_DONE";
+        // Completion is monotonic for one mission.  A still-running ground
+        // node may publish an older IDLE sample after the completion edge;
+        // that must not revoke permission while the air mission is starting.
+        ground_complete_ = ground_complete_ ||
+          message->data == "COMPLETE" || message->data == "SUCCESS" ||
+          message->data == "GROUND_DONE";
       });
     cargo_subscription_ = create_subscription<std_msgs::msg::String>(
       "/cargo_bay/status", rclcpp::QoS(10),
@@ -194,7 +266,8 @@ private:
     if (message->data == "ARM_OFFBOARD" || message->data == "ARM_FIXED" ||
       message->data == "TRAJECTORY" || message->data == "FIXED" ||
       message->data == "RETURN" || message->data == "HOLD" ||
-      message->data == "LAND" || message->data == "RESET" ||
+      message->data == "VISUAL" || message->data == "LAND" ||
+      message->data == "RESET" ||
       message->data == "FORCE_DISARM")
     {
       operator_mode_ = message->data;
@@ -209,7 +282,10 @@ private:
   void onCargoStatus(const std_msgs::msg::String::SharedPtr message)
   {
     side_door_closed_ = updateSideDoorClosed(side_door_closed_, message->data);
-    payload_released_ = payload_released_ || contains(message->data, "payload_released");
+    if (!payload_released_ && contains(message->data, "payload_released")) {
+      payload_released_ = true;
+      payload_released_at_ = now();
+    }
   }
 
   void onPx4Status(const std_msgs::msg::String::SharedPtr message)
@@ -253,7 +329,12 @@ private:
       const double sin_pitch = std::clamp(
         2.0 * (orientation.w * orientation.y - orientation.z * orientation.x),
         -1.0, 1.0);
-      estimated_pitch_radians_ = std::asin(sin_pitch);
+    estimated_pitch_radians_ = std::asin(sin_pitch);
+    const double sin_yaw = 2.0 *
+      (orientation.w * orientation.z + orientation.x * orientation.y);
+    const double cos_yaw = 1.0 - 2.0 *
+      (orientation.y * orientation.y + orientation.z * orientation.z);
+    estimated_yaw_radians_ = std::atan2(sin_yaw, cos_yaw);
     }
     last_odometry_time_ = steadyNow();
     if (!have_home_ && !armed_) {
@@ -292,6 +373,10 @@ private:
     const double sin_pitch = std::clamp(
       2.0 * (orientation.w * orientation.y - orientation.z * orientation.x), -1.0, 1.0);
     prearm_sample_.pitch_radians = std::asin(sin_pitch);
+    if (!armed_) {
+      raw_home_ = prearm_sample_.position;
+      have_raw_home_ = true;
+    }
     have_raw_pose_ = true;
     last_raw_pose_time_ = steadyNow();
   }
@@ -307,8 +392,8 @@ private:
   void onTargetOffset(const std_msgs::msg::Float32MultiArray::SharedPtr message)
   {
     if (message->data.size() < 4 || message->data[2] <= 0.0F) {
-      target_visible_ = false;
-      aligned_since_.reset();
+      // Invalid render frames do not refresh the last valid observation.
+      // tick() expires it after the configured loss-grace interval.
       return;
     }
     target_visible_ = true;
@@ -338,7 +423,9 @@ private:
   void tick()
   {
     const auto previous_phase = supervisor_.phase();
-    const bool recent_target = target_visible_ && ageOrInfinity(last_target_time_) <= 0.3;
+    const bool recent_target = visualTargetRecent(
+      target_visible_, ageOrInfinity(last_target_time_),
+      visual_target_loss_grace_seconds_);
     const bool instant_alignment = recent_target &&
       std::hypot(target_nx_, target_ny_) <= visual_offset_threshold_ &&
       std::hypot(current_velocity_.x, current_velocity_.y) < 0.05 &&
@@ -389,7 +476,22 @@ private:
     inputs.target_visible = recent_target;
     inputs.target_aligned = stable_alignment;
     inputs.payload_released = payload_released_;
-    inputs.at_home = have_home_ && near({home_.x, home_.y, takeoff_height_});
+    inputs.drop_release_settled = payload_released_at_.has_value() &&
+      (now() - *payload_released_at_).seconds() >= payload_release_settle_seconds_;
+    const Vec3 raw_return_target = have_raw_home_ ?
+      Vec3{raw_home_.x, raw_home_.y, raw_home_.z + return_approach_clearance_} :
+      Vec3{};
+    const bool raw_return_ready = have_raw_home_ && have_raw_pose_ && have_raw_twist_ &&
+      ageOrInfinity(last_raw_pose_time_) <= hold_timeout_ &&
+      ageOrInfinity(last_raw_twist_time_) <= hold_timeout_;
+    inputs.at_home = raw_return_ready ?
+      (std::hypot(
+        prearm_sample_.position.x - raw_return_target.x,
+        prearm_sample_.position.y - raw_return_target.y) <= return_horizontal_tolerance_ &&
+      std::abs(prearm_sample_.position.z - raw_return_target.z) <= pose_tolerance_ &&
+      norm(prearm_sample_.velocity) <= return_max_speed_) :
+      (have_home_ && near({
+        home_.x, home_.y, home_.z + return_approach_clearance_}));
     inputs.landed = have_landed_status_ && landed_;
     inputs.odometry_age_seconds = ageOrInfinity(last_odometry_time_);
     inputs.pointcloud_age_seconds = ageOrInfinity(last_pointcloud_time_);
@@ -398,6 +500,10 @@ private:
 
     // The pure core owns all safety transitions. ROS commands below are projections of its decision.
     auto decision = supervisor_.update(inputs);
+    const bool return_fine_active =
+      decision.phase == FlightPhase::RETURN && raw_return_ready &&
+      returnFineAlignmentReady(
+      raw_home_, prearm_sample_.position, return_fine_radius_);
     const bool operator_override = operator_mode_.has_value();
     const double worst_navigation_age = std::max(
       ageOrInfinity(last_odometry_time_), ageOrInfinity(last_pointcloud_time_));
@@ -429,8 +535,6 @@ private:
       publishOperatorOverride();
     } else if (decision.request_land) {
       publishString(control_mode_publisher_, "LAND");
-    } else if (decision.hold_position) {
-      publishString(control_mode_publisher_, "HOLD");
     } else if (operator_land_latched_) {
       if (operator_override && *operator_mode_ == "RESET" &&
         have_landed_status_ && landed_ && !armed_)
@@ -440,11 +544,15 @@ private:
       } else {
         publishString(control_mode_publisher_, "LAND");
       }
+    } else if (decision.hold_position) {
+      publishString(control_mode_publisher_, "HOLD");
     } else if (operator_airborne && worst_navigation_age > hold_timeout_) {
       publishString(control_mode_publisher_, "HOLD");
     } else if (operator_arm_requested && !operator_arm_allowed)
     {
       publishString(control_mode_publisher_, "DISABLED");
+    } else if (!operator_override && return_fine_active) {
+      publishString(control_mode_publisher_, "RETURN_FINE");
     } else if (operator_override) {
       publishOperatorOverride();
     } else {
@@ -453,10 +561,17 @@ private:
 
     const auto phase = decision.phase;
     if (!operator_override && phase != previous_phase) {
-      onPhaseEntered(phase);
+      onPhaseEntered(previous_phase, phase);
     }
     if (!operator_override && phase == FlightPhase::VISUAL_ALIGN) {
       publishVisualVelocity(recent_target);
+    }
+    if (!operator_override && phase == FlightPhase::RETURN) {
+      if (return_fine_active) {
+        publishReturnFineVelocity();
+      } else {
+        publishReturnGoal(false);
+      }
     }
 
     std_msgs::msg::String state;
@@ -476,6 +591,10 @@ private:
         prearm_attitude_tolerance_radians_) ? "true" : "false");
     state.data += std::string(" planner_map_ready=") +
       (planner_map_ready ? "true" : "false");
+    if (phase == FlightPhase::RETURN) {
+      state.data += std::string(" return_waypoint_reached=") +
+        (return_transit_waypoint_reached_ ? "true" : "false");
+    }
     state_publisher_->publish(state);
   }
 
@@ -533,7 +652,7 @@ private:
     publishString(control_mode_publisher_, *operator_mode_);
   }
 
-  void onPhaseEntered(FlightPhase phase)
+  void onPhaseEntered(FlightPhase previous_phase, FlightPhase phase)
   {
     switch (phase) {
       case FlightPhase::PREFLIGHT:
@@ -566,9 +685,10 @@ private:
         publishString(cargo_command_publisher_, "bottom_open");
         break;
       case FlightPhase::RETURN:
-        if (have_home_) {
-          publishGoal({home_.x, home_.y, takeoff_height_});
+        if (shouldResetReturnTransitWaypoint(previous_phase, phase)) {
+          return_transit_waypoint_reached_ = false;
         }
+        publishReturnGoal(true);
         publishString(control_mode_publisher_, "RETURN");
         break;
       case FlightPhase::LAND:
@@ -652,13 +772,75 @@ private:
     velocity.header.stamp = now();
     velocity.header.frame_id = map_frame_;
     if (target_recent) {
-      // Default down-camera mounting: image +y maps to world -x and image +x maps to world -y.
-      velocity.twist.linear.x = std::clamp(
-        -visual_kp_ * target_ny_, -visual_max_velocity_, visual_max_velocity_);
-      velocity.twist.linear.y = std::clamp(
-        -visual_kp_ * target_nx_, -visual_max_velocity_, visual_max_velocity_);
+      const Vec3 correction = visualAlignmentVelocityEnu(
+        target_nx_, target_ny_, estimated_yaw_radians_,
+        visual_kp_, visual_max_velocity_);
+      velocity.twist.linear.x = correction.x;
+      velocity.twist.linear.y = correction.y;
     }
     visual_velocity_publisher_->publish(velocity);
+  }
+
+  void publishReturnFineVelocity()
+  {
+    const Vec3 staged_target = stagedReturnRawTarget(
+      raw_home_, prearm_sample_.position, return_transit_clearance_,
+      return_approach_clearance_, return_descent_radius_);
+    const Vec3 correction = positionAlignmentVelocityEnu(
+      prearm_sample_.position, staged_target, return_fine_kp_,
+      return_fine_max_velocity_, return_fine_max_vertical_velocity_);
+    geometry_msgs::msg::TwistStamped velocity;
+    velocity.header.stamp = now();
+    velocity.header.frame_id = map_frame_;
+    velocity.twist.linear.x = correction.x;
+    velocity.twist.linear.y = correction.y;
+    velocity.twist.linear.z = correction.z;
+    visual_velocity_publisher_->publish(velocity);
+  }
+
+  void publishReturnGoal(bool force)
+  {
+    if (!have_home_) {
+      return;
+    }
+    const auto current_time = steadyNow();
+    if (!force && last_return_goal_time_.time_since_epoch().count() != 0 &&
+      std::chrono::duration<double>(current_time - last_return_goal_time_).count() <
+      return_goal_update_seconds_)
+    {
+      return;
+    }
+
+    const bool raw_return_ready = have_raw_home_ && have_raw_pose_ &&
+      ageOrInfinity(last_raw_pose_time_) <= hold_timeout_;
+    const Vec3 route_position =
+      raw_return_ready ? prearm_sample_.position : current_position_;
+    if (!return_transit_waypoint_reached_ &&
+      returnTransitWaypointReached(
+        route_position, return_transit_waypoint_,
+        return_transit_waypoint_radius_,
+        return_transit_waypoint_vertical_tolerance_))
+    {
+      return_transit_waypoint_reached_ = true;
+      // The executor normally protects an active trajectory until its end.
+      // This explicit route edge grants exactly one replacement for the new
+      // home endpoint without weakening ordinary rolling-replan stability.
+      publishString(control_mode_publisher_, "RETURN_ROUTE_UPDATE");
+    }
+    Vec3 target = returnRouteRawTarget(
+      home_, current_position_, return_transit_waypoint_, return_approach_pose_,
+      return_transit_waypoint_reached_, return_fine_radius_, return_transit_clearance_,
+      return_approach_clearance_, return_descent_radius_);
+    if (raw_return_ready) {
+      const Vec3 raw_target = returnRouteRawTarget(
+        raw_home_, prearm_sample_.position, return_transit_waypoint_, return_approach_pose_,
+        return_transit_waypoint_reached_, return_fine_radius_, return_transit_clearance_,
+        return_approach_clearance_, return_descent_radius_);
+      target = rawErrorCorrectedNavigationTarget(
+        raw_target, prearm_sample_.position, current_position_, return_truth_xy_gain_);
+    }
+    publishGoal(target);
+    last_return_goal_time_ = current_time;
   }
 
   static void publishString(
@@ -682,13 +864,29 @@ private:
   double pose_tolerance_{0.2};
   double visual_offset_threshold_{0.04};
   double visual_alignment_seconds_{0.8};
+  double visual_target_loss_grace_seconds_{0.6};
   double visual_kp_{0.25};
   double visual_max_velocity_{0.2};
   double drop_min_height_{1.6};
   double drop_max_height_{2.0};
+  double payload_release_settle_seconds_{2.0};
+  double return_transit_clearance_{0.67};
+  double return_approach_clearance_{0.055};
+  double return_descent_radius_{0.20};
+  double return_truth_xy_gain_{2.0};
+  double return_horizontal_tolerance_{0.02};
+  double return_max_speed_{0.05};
+  double return_fine_radius_{0.25};
+  double return_fine_kp_{0.4};
+  double return_fine_max_velocity_{0.08};
+  double return_fine_max_vertical_velocity_{0.05};
+  double return_goal_update_seconds_{0.5};
   FlightSupervisor supervisor_;
   Vec3 search_pose_;
+  Vec3 return_transit_waypoint_;
+  Vec3 return_approach_pose_;
   Vec3 home_;
+  Vec3 raw_home_;
   Vec3 current_position_;
   Vec3 current_velocity_;
   PrearmPoseSample prearm_sample_;
@@ -708,24 +906,31 @@ private:
   bool landed_{false};
   bool have_landed_status_{false};
   bool have_home_{false};
+  bool have_raw_home_{false};
   bool have_raw_pose_{false};
   bool have_raw_twist_{false};
   bool have_estimated_attitude_{false};
   bool target_visible_{false};
   bool payload_released_{false};
+  bool return_transit_waypoint_reached_{false};
   bool have_operator_goal_{false};
   bool operator_land_latched_{false};
   double target_nx_{0.0};
   double target_ny_{0.0};
   double estimated_roll_radians_{0.0};
   double estimated_pitch_radians_{0.0};
+  double estimated_yaw_radians_{0.0};
+  double return_transit_waypoint_radius_{0.15};
+  double return_transit_waypoint_vertical_tolerance_{0.15};
   SteadyTime last_odometry_time_{};
   SteadyTime last_planner_state_time_{};
   SteadyTime last_raw_pose_time_{};
   SteadyTime last_raw_twist_time_{};
   SteadyTime last_pointcloud_time_{};
   SteadyTime last_target_time_{};
+  SteadyTime last_return_goal_time_{};
   std::optional<rclcpp::Time> aligned_since_;
+  std::optional<rclcpp::Time> payload_released_at_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr fixed_setpoint_publisher_;

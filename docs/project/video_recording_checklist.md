@@ -1,7 +1,8 @@
 # 视频录屏清单 (D-2.1)
 
 > 命名严格按 `docs/project/submission_checklist.md`。
-> 时长 ≤ 3 分钟 / 段；10 必交 + 5 加分 = 15 段。
+> 时长 ≤ 3 分钟 / 段；11 必交 + 5 加分 = 16 段。
+> 赛段二现场顺序与安全门以 `docs/project/stage2_demo_runbook.md` 为准；本页只列镜头内容。
 > 录制环境：VNC `:5900` 密码 `robo2026`，Isaac Sim + Pegasus 跑 PX4+UAV+双臂视觉。
 > 录制工具：`ffmpeg -f x11grab -video_size 1920x1080 -framerate 30 -i :99 ...`
 
@@ -82,26 +83,26 @@ XX队占位 → 全局替换为真实队名。
 
 ### 段 7 — 预选赛赛段2任务2-关侧舱
 **内容**：
-1. `dual_arm_pick_place_node` 启动
-2. `chain_status` 看 `/arena/ground/state=IDLE` `drone=IDLE`
-3. 触发 `ground_state_sim`
-4. Foxglove 看 `/cargo_bay/command` = `left_close`（来自 supervisor PREFLIGHT 阶段）
-5. `cargo_status_sim` 镜像回 `left_closed bottom_opened`
+1. 进入 VNC，确认门当前是 `left_opened`（默认）
+2. 在 Host 终端执行 `bash docs/project/stage2_demo_control.sh close-doors`（已设 `CONFIRM_SCENE_COMMAND=YES`）
+3. VNC 中看到侧舱门关闭，VNC 右侧 `/cargo_bay/status` 出现 `left_closed bottom_closed payload_locked=True prearm_support=True`
+4. 文字说明：必须在 PX4 启动前完成，否则 EKF 会把关门瞬态当作姿态原点
 
 **时长**：2 分钟
 
 ### 段 8 — 预选赛赛段2任务3-起飞飞行
 **内容**：
-1. `ros2 run bridge_competition_pkg mission_trigger` 触发
-2. Foxglove 看 `/drone/navigation/state` 走 `IDLE → PREFLIGHT → ARMING`
-3. `arm_offboard` → ARM
-4. **关键说明**：PX4 SIH Offboard 接受有 v1.16 quirk，本段演示 ARMING 阶段（视频中说"已实现自主 Offboard 飞行链路，PX4 v1.16.2 SIH 端到端可 ARMING，待最终比赛环境验证 TAKEOFF"）
+1. 启动 PX4 Docker，确认 `/fmu/out/vehicle_status_v1` 实时
+2. 启动 Host bringup（`stage2_demo_control.sh host`），rosbag 自动带时间戳
+3. `chain_status` 与 `drone_interface_audit` 报告 `ok=true`
+4. 比赛默认保留 `mission_autostart=false`；触发方式为 `CONFIRM_FLIGHT=YES bash docs/project/stage2_demo_control.sh mission`，说明只发一次地面 COMPLETE，orchestrator 内部一次性派发，**不叠加 `mission_trigger`**
+5. Foxglove 看 `/drone/navigation/state` 走 `IDLE → PREFLIGHT → ARMING → TAKEOFF`；如未到 TAKEOFF 则说明本段只到 ARMING 阶段
 
 **时长**：2 分钟
 
 ### 段 9 — 预选赛赛段2任务4-视觉对准
 **内容**：
-1. `drone_target_detector_node` 启动
+1. `drone_target_detector_node` 启动（已含在 host chain）
 2. VNC 里把红色 marker 放在 down_camera 视野下
 3. Foxglove 看 `/drone/drop_target_offset` 4 个 float：`[nx, ny, area_fraction, radius_px]`
 4. 移到中心 → `area_fraction` 上升，`(nx, ny) → 0`
@@ -111,19 +112,18 @@ XX队占位 → 全局替换为真实队名。
 
 ### 段 10 — 预选赛赛段2任务5-投放执行
 **内容**：
-1. `cargo_status_sim` 模拟 `bottom_opened payload_released`
-2. `flight_supervisor` 在 `DROP_HOLD` 阶段发 `bottom_open`
-3. 状态机推进 `DROP_HOLD → RETURN → LAND → COMPLETE`
-4. chain_status 输出
+1. 不在飞行中录：先停飞、停 PX4、重载场景并锁定 payload
+2. 在 PX4 未启动时执行 `CONFIRM_CARGO_RELEASE=YES bash docs/project/stage2_demo_control.sh release-payload`
+3. VNC 中看到真实底舱门打开、payload 落到桌面、`/cargo_bay/status=bottom_opened payload_released`
+4. 文字说明：完整 `DROP_HOLD → RETURN → LAND → COMPLETE` 状态机链路（`docs/project/diagrams/flight_supervisor.mmd`）也展示在图中
 
 **时长**：2 分钟
 
 ### 段 11 — 预选赛赛段2任务6-精准度
 **内容**：
-1. D-3.4 砍掉；用 `chain_status` 演示视觉 PID 调参
-2. 改 `navigation.yaml` 里的 `visual_kp=0.25` 前后对比
-3. Foxglove 看 `/drone/navigation/visual_velocity` 跟随
-4. 文字说明：比赛验收需 90% 落点 ≤ 0.2m（受 PX4 SIH Offboard quirk 限制，比赛当天验证）
+1. 有真实投放才量落点；没有则本段只展示视觉误差、Foxglove 落点叠加和说明
+2. 调整 `navigation.yaml` 里的 `visual_kp=0.25` 前后对比（不修改默认值），输出 `/drone/navigation/visual_velocity`
+3. 文字说明：比赛验收需 90% 落点 ≤ 0.2 m，无真实投放不得伪造距离
 
 **时长**：2 分钟
 

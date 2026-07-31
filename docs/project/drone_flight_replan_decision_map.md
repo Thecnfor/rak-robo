@@ -108,8 +108,15 @@ boundary. Position, velocity, acceleration and yaw stay in the existing trajecto
 contract. The executor now owns an explicit prestream/active/hold/land/complete
 lifecycle, enforces a single writer for the three contracted Offboard inputs, samples trajectories in simulation
 time, and prevents the rolling planner from restarting the slow beginning of a
-takeoff spline more often than every 4 simulated seconds. Collision-triggered
-priority replacement and full command-ACK policy remain open before obstacle runs.
+trajectory. A live 2026-07-31 trial showed that accepting every normal replan
+after 4 simulated seconds repeatedly restarts the zero-speed segment and stalls
+progress; it was safely aborted and reverted. Normal same-goal updates therefore
+remain pinned through the endpoint, while NO_PATH recovery, phase changes and
+unsafe return-altitude corrections may preempt immediately. The polyline
+fallback now stops at each A* corner with a triangular/trapezoidal speed profile
+constrained by both maximum velocity and acceleration. A dedicated
+`ACTIVE_OBSTACLE_REPLAN` signal and dynamic-obstacle real-scene validation
+remain open.
 
 ## #5: What does HOLD mean operationally?
 
@@ -154,6 +161,26 @@ M9.4 remains open for the formal 1.8 m / 30 s hover because the current runs wer
 deliberately limited to z=1.30/1.45 m. `round1i` held within 0.0901 m horizontally
 but still reached 0.0827 m/s and displaced 0.2756 m during landing. The next ticket
 is speed-settling/controller and landing calibration, then 1.8 m / 30 s and repeat trials.
+
+The 2026-07-26 fixed-setpoint ladder supersedes that altitude limitation. One
+single-round run passed +0.10 through +0.30 m and returned to the cradle. A
+subsequent run passed +0.10/+0.20/+0.30/+0.40/+0.50/+0.60/+0.67 m, reached
+world z=1.80 m, held for five simulated seconds, returned through the 8 mm
+Isaac-truth capture gate, landed in the verified support and disarmed. All five
+command ACKs succeeded. ULog `2026-07-26/12_57_18.ulg` recorded actual
+roll/pitch maxima 0.289/0.694 degrees, motor maxima 0.584--0.602, and no
+saturation, failsafe or failure-detector flag. The exact probe artifact is
+`/tmp/drone_stage2_fullheight_180m_return_20260726.json`.
+
+The subsequent formal 30-second run also passed the complete ladder, hold,
+truth-guided return, landing and disarm. Its hold maxima were 0.0347 m
+horizontal error, 0.0154 m altitude error and 0.0267 m/s speed. ULog
+`2026-07-26/13_32_30.ulg` recorded actual roll/pitch maxima 0.240/0.888
+degrees, motor maxima 0.504--0.518, and no saturation, failsafe or
+failure-detector flag. The checksummed combined record is
+[`drone_fullheight_hold30_evidence_2026-07-26.json`](drone_fullheight_hold30_evidence_2026-07-26.json).
+M9.4 fixed-setpoint hover is resolved; repeatability and EGO navigation remain
+open.
 
 The 2026-07-22 `round2` rerun did not pass: it reached z=1.325 m but failed to
 converge within the 0.15 m horizontal takeoff envelope before the 15 s simulated
@@ -393,8 +420,9 @@ inspection found that the old guide envelope came from
 body API. The actual main collision
 `/World/quadrotor/body/body_collision` remained 15--17.5 mm from those walls,
 so the 12 mm abort gate fired before any lateral contact could occur. The
-scene now generates the four guide walls directly around the main collision
-with 5 mm clearance, filters the wider cargo body, doors, locked payload and
+scene now generates the four guide walls directly around the main collision;
+the initial 5 mm clearance was subsequently calibrated to 10 mm. It filters
+the wider cargo body, doors, locked payload and
 rotors from those walls, and closes the left cargo door before PX4 estimator
 startup. Without the cargo filter, the initial wall overlap drove the
 articulation to NaN and Isaac Sim exited with SIGSEGV. Nine offline geometry
@@ -416,6 +444,32 @@ arming requires an explicitly supplied, scene-verified landing region. EKF
 innovation extraction and the five-command-ACK acceptance summary remain required
 evidence for the next successful run.
 
+On 2026-07-26 the corrected rotor allocation, inertia-matched scene and bounded
+PX4 envelope completed a new +0.10 m flight. Two intentionally failed return
+trials isolated a stale guide contract: the current scene has 10 mm clearance
+around `body_collision`, while the probe still enforced the older 4 mm return
+radius and coupled it to the independent prearm tolerance. PX4 local position
+entered that old radius for 4.50 s, but GPS/EKF versus Isaac truth accumulated
+about 20 mm of dynamic horizontal bias, so further MPC gain reduction could not
+solve millimetre cradle insertion. The rejected single-variable
+`MPC_XY_P=0.50` trial was reverted to 0.95.
+
+The return gate now uses Isaac truth and an 8 mm radius, preserving 2 mm physical
+clearance inside the measured 10 mm guide; prearm remains 4 mm. The subsequent
+ticket completed `FIXED_STEP -> FIXED_HOLD -> RETURN_HOME -> LAND -> RESET`
+without timeout or abort. Touchdown was
+`(4.549843,-0.380000,1.130000)`, 0.16 mm from the cradle centre. ULog
+`docker/px4/ulog/2026-07-26/01_32_29.ulg` recorded maximum actual
+roll/pitch 3.73/2.39 degrees, motor maxima
+0.588/0.503/0.562/0.774, zero samples at or above 0.95, no failsafe,
+failure-detector or EKF fault, and all five command ACKs succeeded. The exact
+probe artifact is `/tmp/drone_stage2_guide_aligned_010m_20260726.json`.
+The +0.10 m gate is resolved again. Later on 2026-07-26, +0.20 and +0.30 m
+steps passed in one run, followed by the complete +0.67 m/world-z=1.80 m
+ladder and a five-second hold. Ticket #10 is therefore resolved for bounded
+climb and short hold; the formal 10/30-second endurance and EGO trajectory
+continuity remain separate acceptance tickets.
+
 ## #11: How are EGO replans handed to an active trajectory continuously?
 
 Blocked by: #4, #10
@@ -428,12 +482,15 @@ replan acceptance rule?
 
 ### Answer
 
-Open. The planner published about 4.6 trajectories/s during `round2`; endpoints
-were fixed, but each plan restarted from the current oscillating state. Require
-position/velocity/acceleration continuity at the splice point, reject non-urgent
-updates that do not materially improve the active path, and allow immediate
-replacement only for collision risk. Unit-test bounded setpoint jumps before
-reconnecting live pointcloud planning.
+Partially resolved. The planner published about 4.6 trajectories/s during
+`round2`; endpoints were fixed, but each plan restarted from the current state.
+The executor now rejects ordinary same-goal updates until the active endpoint
+and has explicit immediate preemption for phase changes, NO_PATH recovery and
+unsafe return-altitude corrections. A 2026-07-31 live attempt to accept every
+ordinary update after 4 simulated seconds confirmed the restart-stall failure
+and was safely landed, so that policy was removed. Remaining work is a dedicated
+collision-risk signal (`ACTIVE_OBSTACLE_REPLAN`) with splice continuity checks
+before live dynamic-obstacle acceptance.
 
 ## #12: Where may normal and emergency landing occur?
 
@@ -447,7 +504,14 @@ immediate failsafe path?
 
 ### Answer
 
-Open. Define a table/support landing polygon and horizontal/vertical geofence.
+Resolved for normal fixed-setpoint return; emergency-site selection remains
+open. The verified support polygon is centered at `(4.55,-0.38)` with
+`(0.02,0.02)` half extents. Normal return follows a gain-2 Isaac-truth outer
+loop until it is inside the 8 mm capture radius below 0.01 m/s, uses 12 mm
+hysteresis to reject a bad capture, and hands PX4 Land over 0.055 m above the
+support. The full-height run touched down about 10.2 mm from the center, inside
+the physical guide/support, then disarmed.
+
 Normal mission completion must return above home, settle inside the polygon, then
 request NAV_LAND. Tracking timeout outside the polygon must select a separately
 verified emergency landing policy; transport loss or PX4 failsafe still requests
@@ -466,9 +530,11 @@ What sequence proves the repaired chain before returning to obstacle navigation?
 
 ### Answer
 
-Open. Required order: offline/unit tests; reset/support rejection test; transformed
-map readiness test; fixed-setpoint +0.10/+0.20 m tests; 1.30 m 10 s HOLD with safe
-landing; 1.80 m 30 s HOLD; then three consecutive EGO takeoff/return/landing runs.
+Partially resolved. Offline/unit tests, reset/support gates, transformed map
+readiness, bounded fixed-setpoint climbs through world z=1.80 m, the formal
+30-second hold, safe return and landing have passed. Remaining order: an
+empty-space EGO goal/return; then three consecutive EGO
+takeoff/return/landing runs before obstacle and mission rehearsal.
 Every flight must preserve the unique `/fmu/in/*` writer, five successful command
 ACKs, no failsafe, no actuator saturation, speed <=0.05 m/s in the acceptance
 window, and touchdown inside the selected polygon. Only then resume obstacle and

@@ -36,6 +36,7 @@ COMMON_REQUIRED_TOPICS = [
     '/drone0/down_camera/color/image_raw',
     '/cargo_bay/command',
     '/cargo_bay/status',
+    '/cargo_bay/payload_position',
 ]
 
 PX4_REQUIRED_TOPICS = [

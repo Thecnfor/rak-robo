@@ -46,10 +46,25 @@ public:
     config.virtual_ceiling = declare_parameter<double>("virtual_ceiling", 2.9);
     config.max_velocity = declare_parameter<double>("max_velocity", 0.5);
     config.max_acceleration = declare_parameter<double>("max_acceleration", 1.0);
+    const auto max_expanded_voxels = declare_parameter<int>(
+      "max_expanded_voxels", 200000);
+    if (max_expanded_voxels <= 0) {
+      throw std::runtime_error("max_expanded_voxels must be positive");
+    }
+    config.max_expanded_voxels = static_cast<std::size_t>(max_expanded_voxels);
+    config.heuristic_weight = declare_parameter<double>("heuristic_weight", 1.5);
+    polyline_fallback_speed_ = declare_parameter<double>(
+      "polyline_fallback_speed", 0.15);
+    pointcloud_tf_tolerance_ = declare_parameter<double>(
+      "pointcloud_tf_tolerance", 0.10);
     obstacle_memory_seconds_ = declare_parameter<double>("obstacle_memory_seconds", 1.0);
     map_readiness_timeout_ = declare_parameter<double>("planner_map_timeout", 0.6);
-    if (map_readiness_timeout_ <= 0.0) {
-      throw std::runtime_error("planner_map_timeout must be positive");
+    if (map_readiness_timeout_ <= 0.0 || pointcloud_tf_tolerance_ <= 0.0 ||
+      polyline_fallback_speed_ <= 0.0 ||
+      polyline_fallback_speed_ > config.max_velocity)
+    {
+      throw std::runtime_error(
+              "planner timeout and polyline fallback speed must be valid");
     }
     config_ = config;
     planner_ = std::make_unique<VoxelPlanner>(config_);
@@ -105,7 +120,6 @@ private:
     };
     last_odometry_time_ = now();
     have_odometry_ = true;
-    odometry_revision_++;
   }
 
   void onGoal(const geometry_msgs::msg::PoseStamped::SharedPtr message)
@@ -126,9 +140,26 @@ private:
       if (message->header.frame_id == map_frame_) {
         cloud_in_map = *message;
       } else {
-        const auto transform = tf_buffer_.lookupTransform(
-          map_frame_, message->header.frame_id, message->header.stamp,
-          std::chrono::milliseconds(50));
+        geometry_msgs::msg::TransformStamped transform;
+        try {
+          transform = tf_buffer_.lookupTransform(
+            map_frame_, message->header.frame_id, message->header.stamp,
+            std::chrono::milliseconds(0));
+        } catch (const tf2::TransformException &) {
+          transform = tf_buffer_.lookupTransform(
+            map_frame_, message->header.frame_id, tf2::TimePointZero,
+            std::chrono::milliseconds(0));
+          const rclcpp::Time transform_stamp(transform.header.stamp);
+          const rclcpp::Time cloud_stamp(message->header.stamp);
+          const bool timeless_transform = transform_stamp.nanoseconds() == 0;
+          if (!timeless_transform &&
+            std::abs((transform_stamp - cloud_stamp).seconds()) >
+            pointcloud_tf_tolerance_)
+          {
+            throw tf2::ExtrapolationException(
+                    "latest transform exceeds pointcloud_tf_tolerance");
+          }
+        }
         tf2::doTransform(*message, cloud_in_map, transform);
       }
     } catch (const tf2::TransformException & exception) {
@@ -165,10 +196,11 @@ private:
     last_pointcloud_time_ = update_time;
     last_transform_success_time_ = update_time;
     rolling_map_->update(obstacles, update_time.seconds());
-    planner_->setObstacles(
-      rolling_map_->obstaclesAround(
-        current_position_, config_.horizontal_range, config_.vertical_range,
-        last_pointcloud_time_.seconds()));
+    const auto map_obstacles = rolling_map_->obstaclesAround(
+      current_position_, config_.horizontal_range, config_.vertical_range,
+      last_pointcloud_time_.seconds());
+    planner_->setObstacles(map_obstacles);
+    last_obstacle_count_ = map_obstacles.size();
     have_pointcloud_ = true;
     have_transform_update_ = true;
     cloud_revision_++;
@@ -186,8 +218,8 @@ private:
       publishState("HOLD_STALE_INPUT");
       return;
     }
-    if (goal_revision_ == planned_goal_revision_ && cloud_revision_ == planned_cloud_revision_ &&
-      odometry_revision_ == planned_odometry_revision_)
+    if (goal_revision_ == planned_goal_revision_ &&
+      cloud_revision_ == planned_cloud_revision_)
     {
       return;
     }
@@ -195,9 +227,13 @@ private:
     const auto path = planner_->plan(current_position_, localGoal());
     planned_goal_revision_ = goal_revision_;
     planned_cloud_revision_ = cloud_revision_;
-    planned_odometry_revision_ = odometry_revision_;
     if (path.size() < 2) {
-      publishState("NO_PATH");
+      publishState(
+        std::string("NO_PATH start_clear=") +
+        (planner_->collisionFree(current_position_, current_position_) ? "true" : "false") +
+        " goal_clear=" +
+        (planner_->collisionFree(localGoal(), localGoal()) ? "true" : "false") +
+        " obstacle_count=" + std::to_string(last_obstacle_count_));
       return;
     }
 
@@ -213,11 +249,6 @@ private:
       }
       previous = position;
     }
-    if (!collision_free) {
-      publishState("NO_PATH_SPLINE_COLLISION");
-      return;
-    }
-
     const auto stamp = now();
     nav_msgs::msg::Path debug_path;
     debug_path.header.stamp = stamp;
@@ -237,12 +268,23 @@ private:
     trajectory.header = debug_path.header;
     trajectory.trajectory_id = ++trajectory_id_;
     constexpr double kSamplePeriod = 0.05;
-    for (double time = 0.0; time < spline.duration(); time += kSamplePeriod) {
-      appendTrajectoryPoint(trajectory, spline.sample(time), time);
+    if (collision_free) {
+      for (double time = 0.0; time < spline.duration(); time += kSamplePeriod) {
+        appendTrajectoryPoint(trajectory, spline.sample(time), time);
+      }
+      appendTrajectoryPoint(trajectory, spline.sample(spline.duration()), spline.duration());
+    } else {
+      for (const auto & sample : sampleCollisionFreePolyline(
+          path, kSamplePeriod, polyline_fallback_speed_, config_.max_acceleration))
+      {
+        appendTrajectoryPoint(
+          trajectory, sample.state, sample.time_from_start_seconds);
+      }
     }
-    appendTrajectoryPoint(trajectory, spline.sample(spline.duration()), spline.duration());
     trajectory_publisher_->publish(trajectory);
-    publishState("ACTIVE trajectory_id=" + std::to_string(trajectory_id_));
+    publishState(
+      std::string(collision_free ? "ACTIVE" : "ACTIVE_POLYLINE_FALLBACK") +
+      " trajectory_id=" + std::to_string(trajectory_id_));
   }
 
   Vec3 localGoal() const
@@ -285,6 +327,8 @@ private:
   PlannerConfig config_;
   double obstacle_memory_seconds_{1.0};
   double map_readiness_timeout_{0.6};
+  double polyline_fallback_speed_{0.15};
+  double pointcloud_tf_tolerance_{0.10};
   std::unique_ptr<VoxelPlanner> planner_;
   std::unique_ptr<RollingVoxelMap> rolling_map_;
   tf2_ros::Buffer tf_buffer_;
@@ -297,10 +341,9 @@ private:
   bool have_goal_{false};
   std::uint64_t cloud_revision_{0};
   std::uint64_t goal_revision_{0};
-  std::uint64_t odometry_revision_{0};
   std::uint64_t planned_cloud_revision_{0};
   std::uint64_t planned_goal_revision_{0};
-  std::uint64_t planned_odometry_revision_{0};
+  std::size_t last_obstacle_count_{0};
   std::uint32_t trajectory_id_{0};
   rclcpp::Time last_odometry_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_pointcloud_time_{0, 0, RCL_ROS_TIME};

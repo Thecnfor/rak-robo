@@ -299,13 +299,34 @@ bool verticalOnlyDiagnosticActive(
   }
   if (currently_active) {
     // Once armed in the guide, horizontal drift is evidence of contact with a
-    // guide wall, not evidence that the aircraft has cleared the guide.  Keep
-    // horizontal position control disabled until vertical clearance is
-    // established.  Releasing on an XY-radius violation makes PX4 fight the
-    // static wall and winds up the roll/pitch rate integrators.
+    // guide wall, not evidence that the aircraft has cleared it. Keep
+    // horizontal control disabled only until the configured vertical
+    // clearance: that threshold must be below the physical guide top so PX4
+    // has a contact margin in which to capture XY before free flight.
     return current_clearance_m < release_clearance_m;
   }
   return inside_guided_region && current_clearance_m <= reengage_clearance_m;
+}
+
+double trustedLiftClearance(
+  double estimated_clearance_m,
+  bool truth_valid,
+  double truth_clearance_m)
+{
+  const bool estimated_valid = std::isfinite(estimated_clearance_m);
+  const bool physical_valid = truth_valid && std::isfinite(truth_clearance_m);
+  // In the Isaac diagnostic the fresh raw pose is the physical lift witness.
+  // PX4 local-Z can drift by more than the 5 mm release threshold while the
+  // airframe is still resting on the support, so taking the maximum can
+  // release horizontal control before physical separation. Fall back to the
+  // estimate only when the diagnostic witness is unavailable.
+  if (physical_valid) {
+    return truth_clearance_m;
+  }
+  if (estimated_valid) {
+    return estimated_clearance_m;
+  }
+  return std::numeric_limits<double>::quiet_NaN();
 }
 
 bool verticalOnlyHandoffConfigurationSafe(
@@ -324,7 +345,18 @@ bool verticalOnlyHandoffConfigurationSafe(
          release_clearance_m > reengage_clearance_m &&
          physical_guide_height_m > 0.0 &&
          minimum_handoff_lead_m >= 0.0 &&
-         release_clearance_m + minimum_handoff_lead_m <= physical_guide_height_m;
+         release_clearance_m + minimum_handoff_lead_m <=
+         physical_guide_height_m + 1e-9;
+}
+
+double fixedHandoffBlendScale(double elapsed_seconds, double blend_seconds)
+{
+  if (!std::isfinite(elapsed_seconds) || !std::isfinite(blend_seconds) ||
+    blend_seconds <= 0.0)
+  {
+    return 0.0;
+  }
+  return std::clamp(1.0 - std::max(0.0, elapsed_seconds) / blend_seconds, 0.0, 1.0);
 }
 
 Vec3 operator-(const Vec3 & lhs, const Vec3 & rhs)
@@ -462,6 +494,225 @@ double yawEnuToNed(double yaw_enu)
   return yaw_ned;
 }
 
+Vec3 visualAlignmentVelocityEnu(
+  double normalized_image_x,
+  double normalized_image_y,
+  double vehicle_yaw_enu,
+  double proportional_gain,
+  double maximum_speed)
+{
+  if (!std::isfinite(normalized_image_x) || !std::isfinite(normalized_image_y) ||
+    !std::isfinite(vehicle_yaw_enu) || !std::isfinite(proportional_gain) ||
+    !std::isfinite(maximum_speed) || proportional_gain < 0.0 || maximum_speed <= 0.0)
+  {
+    throw std::invalid_argument("visual alignment inputs and limits must be finite");
+  }
+
+  // The Pegasus camera looks along body -Z. Image +X is body +X, while image
+  // +Y points toward body -Y. Rotate that body-frame correction into map ENU.
+  const double body_x = proportional_gain * normalized_image_x;
+  const double body_y = -proportional_gain * normalized_image_y;
+  const double cosine = std::cos(vehicle_yaw_enu);
+  const double sine = std::sin(vehicle_yaw_enu);
+  return {
+    std::clamp(cosine * body_x - sine * body_y, -maximum_speed, maximum_speed),
+    std::clamp(sine * body_x + cosine * body_y, -maximum_speed, maximum_speed),
+    0.0,
+  };
+}
+
+bool visualTargetRecent(
+  bool have_valid_detection,
+  double valid_detection_age_seconds,
+  double loss_grace_seconds)
+{
+  return have_valid_detection &&
+         std::isfinite(valid_detection_age_seconds) &&
+         std::isfinite(loss_grace_seconds) &&
+         valid_detection_age_seconds >= 0.0 &&
+         loss_grace_seconds >= 0.0 &&
+         valid_detection_age_seconds <= loss_grace_seconds;
+}
+
+Vec3 positionAlignmentVelocityEnu(
+  const Vec3 & current_position,
+  const Vec3 & target_position,
+  double proportional_gain,
+  double maximum_horizontal_speed,
+  double maximum_vertical_speed)
+{
+  const std::array<double, 9> values{{
+      current_position.x, current_position.y, current_position.z,
+      target_position.x, target_position.y, target_position.z,
+      proportional_gain, maximum_horizontal_speed, maximum_vertical_speed,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || proportional_gain < 0.0 || maximum_horizontal_speed <= 0.0 ||
+    maximum_vertical_speed <= 0.0)
+  {
+    throw std::invalid_argument("position alignment inputs and limits must be valid");
+  }
+  Vec3 velocity = (target_position - current_position) * proportional_gain;
+  const double horizontal_speed = std::hypot(velocity.x, velocity.y);
+  if (horizontal_speed > maximum_horizontal_speed) {
+    const double scale = maximum_horizontal_speed / horizontal_speed;
+    velocity.x *= scale;
+    velocity.y *= scale;
+  }
+  velocity.z = std::clamp(
+    velocity.z, -maximum_vertical_speed, maximum_vertical_speed);
+  return velocity;
+}
+
+Vec3 rawErrorCorrectedNavigationTarget(
+  const Vec3 & raw_target,
+  const Vec3 & raw_position,
+  const Vec3 & navigation_position,
+  double horizontal_gain)
+{
+  const std::array<double, 10> values{{
+      raw_target.x, raw_target.y, raw_target.z,
+      raw_position.x, raw_position.y, raw_position.z,
+      navigation_position.x, navigation_position.y, navigation_position.z,
+      horizontal_gain,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || horizontal_gain <= 0.0 || horizontal_gain > 3.0)
+  {
+    throw std::invalid_argument("return guidance requires finite vectors and gain in (0, 3]");
+  }
+  return {
+    navigation_position.x + horizontal_gain * (raw_target.x - raw_position.x),
+    navigation_position.y + horizontal_gain * (raw_target.y - raw_position.y),
+    navigation_position.z + raw_target.z - raw_position.z,
+  };
+}
+
+Vec3 stagedReturnRawTarget(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  double transit_clearance,
+  double approach_clearance,
+  double descent_radius)
+{
+  const std::array<double, 9> values{{
+      raw_home.x, raw_home.y, raw_home.z,
+      raw_position.x, raw_position.y, raw_position.z,
+      transit_clearance, approach_clearance, descent_radius,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || transit_clearance <= approach_clearance || approach_clearance <= 0.0 ||
+    descent_radius <= 0.0)
+  {
+    throw std::invalid_argument(
+            "staged return requires transit clearance above approach clearance "
+            "and a positive descent radius");
+  }
+  const double horizontal_error = std::hypot(
+    raw_position.x - raw_home.x, raw_position.y - raw_home.y);
+  const double clearance =
+    horizontal_error <= descent_radius ? approach_clearance : transit_clearance;
+  return {raw_home.x, raw_home.y, raw_home.z + clearance};
+}
+
+bool returnTransitWaypointReached(
+  const Vec3 & raw_position,
+  const Vec3 & transit_waypoint,
+  double horizontal_tolerance,
+  double vertical_tolerance)
+{
+  const std::array<double, 8> values{{
+      raw_position.x, raw_position.y, raw_position.z,
+      transit_waypoint.x, transit_waypoint.y, transit_waypoint.z,
+      horizontal_tolerance, vertical_tolerance,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || horizontal_tolerance <= 0.0 || vertical_tolerance <= 0.0)
+  {
+    throw std::invalid_argument(
+            "return transit waypoint requires finite vectors and positive tolerances");
+  }
+  return std::hypot(
+    raw_position.x - transit_waypoint.x,
+    raw_position.y - transit_waypoint.y) <= horizontal_tolerance &&
+         std::abs(raw_position.z - transit_waypoint.z) <= vertical_tolerance;
+}
+
+bool shouldResetReturnTransitWaypoint(
+  FlightPhase previous_phase,
+  FlightPhase current_phase)
+{
+  return previous_phase == FlightPhase::DROP_HOLD &&
+         current_phase == FlightPhase::RETURN;
+}
+
+bool returnFineAlignmentReady(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  double horizontal_radius)
+{
+  const std::array<double, 7> values{{
+      raw_home.x, raw_home.y, raw_home.z,
+      raw_position.x, raw_position.y, raw_position.z,
+      horizontal_radius,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || horizontal_radius <= 0.0)
+  {
+    throw std::invalid_argument(
+            "return fine alignment requires finite vectors and a positive radius");
+  }
+  return std::hypot(
+    raw_position.x - raw_home.x,
+    raw_position.y - raw_home.y) <= horizontal_radius;
+}
+
+Vec3 returnRouteRawTarget(
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  const Vec3 & transit_waypoint,
+  const Vec3 & approach_waypoint,
+  bool transit_waypoint_reached,
+  double fine_alignment_radius,
+  double transit_clearance,
+  double approach_clearance,
+  double descent_radius)
+{
+  if (!transit_waypoint_reached) {
+    const std::array<double, 3> waypoint_values{{
+        transit_waypoint.x, transit_waypoint.y, transit_waypoint.z,
+      }};
+    if (!std::all_of(waypoint_values.begin(), waypoint_values.end(), [](double value) {
+        return std::isfinite(value);
+      }))
+    {
+      throw std::invalid_argument("return transit waypoint must be finite");
+    }
+    return transit_waypoint;
+  }
+  const std::array<double, 3> approach_values{{
+      approach_waypoint.x, approach_waypoint.y, approach_waypoint.z,
+    }};
+  if (!std::all_of(approach_values.begin(), approach_values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || !returnFineAlignmentReady(
+      raw_home, approach_waypoint, fine_alignment_radius))
+  {
+    throw std::invalid_argument(
+            "return approach waypoint must be finite and inside the fine alignment radius");
+  }
+  if (!returnFineAlignmentReady(raw_home, raw_position, fine_alignment_radius)) {
+    return approach_waypoint;
+  }
+  return stagedReturnRawTarget(
+    raw_home, raw_position, transit_clearance, approach_clearance, descent_radius);
+}
+
 RollingVoxelMap::RollingVoxelMap(double resolution, double retention_seconds)
 {
   if (resolution <= 0.0 || retention_seconds <= 0.0) {
@@ -526,6 +777,80 @@ ExecutorSafetyAction executorSafetyAction(
     return ExecutorSafetyAction::HOLD;
   }
   return ExecutorSafetyAction::CONTINUE;
+}
+
+double trajectoryControlSourceAge(
+  bool have_trajectory,
+  bool trajectory_started,
+  double trajectory_receipt_age_seconds)
+{
+  if (!have_trajectory) {
+    return std::numeric_limits<double>::infinity();
+  }
+  // A trajectory is a complete time-parametrized control intent. Once
+  // execution starts, sampling beyond its duration intentionally clamps to
+  // the final point, which is a safe position hold. Slow replanning must not
+  // invalidate that already accepted intent.
+  if (trajectory_started) {
+    return 0.0;
+  }
+  return std::max(0.0, trajectory_receipt_age_seconds);
+}
+
+double trajectoryReplacementDelay(
+  double configured_minimum_seconds,
+  double active_trajectory_duration_seconds)
+{
+  if (!std::isfinite(configured_minimum_seconds) ||
+    !std::isfinite(active_trajectory_duration_seconds) ||
+    configured_minimum_seconds < 0.0 || active_trajectory_duration_seconds < 0.0)
+  {
+    throw std::invalid_argument("trajectory replacement delays must be finite and non-negative");
+  }
+  // Normal same-goal updates stay pinned through the endpoint so a high-rate
+  // rolling planner cannot repeatedly restart the zero-speed beginning of a
+  // trajectory. Phase changes, NO_PATH recovery, and return-altitude safety
+  // use explicit preemption paths in the executor.
+  return std::max(configured_minimum_seconds, active_trajectory_duration_seconds);
+}
+
+bool trajectoryMinimumAltitudeImproves(
+  double current_minimum_altitude,
+  double incoming_minimum_altitude,
+  double required_improvement)
+{
+  if (!std::isfinite(current_minimum_altitude) ||
+    !std::isfinite(incoming_minimum_altitude) ||
+    !std::isfinite(required_improvement) || required_improvement < 0.0)
+  {
+    throw std::invalid_argument(
+            "trajectory altitude comparison requires finite values and a "
+            "non-negative improvement");
+  }
+  return incoming_minimum_altitude >=
+         current_minimum_altitude + required_improvement;
+}
+
+bool plannerRecoveryAllowsTrajectoryReplacement(
+  const std::string & previous_state,
+  const std::string & current_state)
+{
+  const bool was_blocked = previous_state.rfind("NO_PATH", 0) == 0;
+  const bool now_active = current_state.rfind("ACTIVE", 0) == 0;
+  return was_blocked && now_active;
+}
+
+bool forcedTrajectoryEndpointChanged(
+  bool have_current_trajectory,
+  const Vec3 & current_endpoint,
+  const Vec3 & incoming_endpoint,
+  double endpoint_tolerance)
+{
+  if (!std::isfinite(endpoint_tolerance) || endpoint_tolerance < 0.0) {
+    throw std::invalid_argument("trajectory endpoint tolerance must be finite and non-negative");
+  }
+  return !have_current_trajectory ||
+         distance(current_endpoint, incoming_endpoint) > endpoint_tolerance;
 }
 
 bool operatorArmRequestAllowed(
@@ -636,6 +961,16 @@ bool forceDisarmBypassesLandLatch(
   const std::string & operator_mode)
 {
   return diagnostic_enabled && land_latched && operator_mode == "FORCE_DISARM";
+}
+
+bool armCommandAllowed(
+  bool arm_requested,
+  bool preflight_accepted,
+  bool failsafe,
+  double previous_command_age_seconds)
+{
+  return arm_requested && preflight_accepted && !failsafe &&
+         previous_command_age_seconds >= 1.0;
 }
 
 ExecutorRequestedMode reduceExecutorRequest(
@@ -751,8 +1086,12 @@ ExecutorFlightState ExecutorLifecycle::state() const
 VoxelPlanner::VoxelPlanner(PlannerConfig config)
 : config_(config)
 {
-  if (config_.resolution <= 0.0 || config_.inflation_radius < 0.0) {
-    throw std::invalid_argument("planner resolution must be positive and inflation non-negative");
+  if (config_.resolution <= 0.0 || config_.inflation_radius < 0.0 ||
+    config_.max_expanded_voxels == 0 || config_.heuristic_weight < 1.0 ||
+    config_.heuristic_weight > 3.0)
+  {
+    throw std::invalid_argument(
+            "planner geometry, expansion budget, and heuristic weight are invalid");
   }
   impl_ = std::make_shared<Impl>(config_);
 }
@@ -796,6 +1135,11 @@ std::vector<Vec3> VoxelPlanner::plan(const Vec3 & start, const Vec3 & goal) cons
   {
     return {};
   }
+  // An occupied endpoint can never be reached because occupied neighbors are
+  // excluded below. Reject it before expanding the complete local volume.
+  if (impl_->occupied(start) || impl_->occupied(goal)) {
+    return {};
+  }
   if (collisionFree(start, goal)) {
     return {start, goal};
   }
@@ -822,71 +1166,100 @@ std::vector<Vec3> VoxelPlanner::plan(const Vec3 & start, const Vec3 & goal) cons
       return impl_->occupiedGrid(index);
     };
 
-  std::priority_queue<QueueEntry> open;
-  std::unordered_map<GridIndex, double, GridIndexHash> g_score;
-  std::unordered_map<GridIndex, GridIndex, GridIndexHash> came_from;
-  std::unordered_set<GridIndex, GridIndexHash> closed;
-  g_score[start_index] = 0.0;
-  open.push({heuristic(start_index, goal_index), start_index});
+  auto search = [&](bool restrict_vertical) {
+      std::priority_queue<QueueEntry> open;
+      std::unordered_map<GridIndex, double, GridIndexHash> g_score;
+      std::unordered_map<GridIndex, GridIndex, GridIndexHash> came_from;
+      std::unordered_set<GridIndex, GridIndexHash> closed;
+      g_score[start_index] = 0.0;
+      open.push(
+        {config_.heuristic_weight * heuristic(start_index, goal_index), start_index});
 
-  constexpr std::size_t kMaximumExpandedVoxels = 500000;
-  std::size_t expanded = 0;
-  bool found = false;
-  while (!open.empty() && expanded < kMaximumExpandedVoxels) {
-    const GridIndex current = open.top().index;
-    open.pop();
-    if (closed.find(current) != closed.end()) {
-      continue;
-    }
-    closed.insert(current);
-    ++expanded;
-    if (current == goal_index) {
-      found = true;
-      break;
-    }
+      std::size_t expanded = 0;
+      bool found = false;
+      while (!open.empty() && expanded < config_.max_expanded_voxels) {
+        const GridIndex current = open.top().index;
+        open.pop();
+        if (closed.find(current) != closed.end()) {
+          continue;
+        }
+        closed.insert(current);
+        ++expanded;
+        if (current == goal_index) {
+          found = true;
+          break;
+        }
 
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -1; dz <= 1; ++dz) {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-          if (!in_bounds(neighbor) || occupied(neighbor) || closed.find(neighbor) != closed.end()) {
-            continue;
-          }
-          const double step_cost = std::sqrt(
-            static_cast<double>(dx * dx + dy * dy + dz * dz));
-          const double tentative = g_score[current] + step_cost;
-          const auto known = g_score.find(neighbor);
-          if (known == g_score.end() || tentative < known->second) {
-            g_score[neighbor] = tentative;
-            came_from[neighbor] = current;
-            open.push({tentative + heuristic(neighbor, goal_index), neighbor});
+        for (int dx = -1; dx <= 1; ++dx) {
+          for (int dy = -1; dy <= 1; ++dy) {
+            const int minimum_dz = restrict_vertical ? 0 : -1;
+            const int maximum_dz = restrict_vertical ? 0 : 1;
+            for (int dz = minimum_dz; dz <= maximum_dz; ++dz) {
+              if (dx == 0 && dy == 0 && dz == 0) {
+                continue;
+              }
+              const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+              if (!in_bounds(neighbor) || occupied(neighbor) ||
+                closed.find(neighbor) != closed.end())
+              {
+                continue;
+              }
+              const double step_cost = std::sqrt(
+                static_cast<double>(dx * dx + dy * dy + dz * dz));
+              const double tentative = g_score[current] + step_cost;
+              const auto known = g_score.find(neighbor);
+              if (known == g_score.end() || tentative < known->second) {
+                g_score[neighbor] = tentative;
+                came_from[neighbor] = current;
+                open.push(
+                  {tentative + config_.heuristic_weight * heuristic(neighbor, goal_index),
+                    neighbor});
+              }
+            }
           }
         }
       }
-    }
+      if (!found) {
+        return std::vector<GridIndex>{};
+      }
+
+      std::vector<GridIndex> indices;
+      GridIndex current = goal_index;
+      indices.push_back(current);
+      while (!(current == start_index)) {
+        const auto parent = came_from.find(current);
+        if (parent == came_from.end()) {
+          return std::vector<GridIndex>{};
+        }
+        current = parent->second;
+        indices.push_back(current);
+      }
+      std::reverse(indices.begin(), indices.end());
+      return indices;
+    };
+
+  std::vector<GridIndex> grid_indices;
+  if (start_index.z == goal_index.z) {
+    grid_indices = search(true);
   }
-  if (!found) {
+  if (grid_indices.empty()) {
+    grid_indices = search(false);
+  }
+  if (grid_indices.empty()) {
     return {};
   }
 
   std::vector<Vec3> grid_path;
-  GridIndex current = goal_index;
-  grid_path.push_back(goal);
-  while (!(current == start_index)) {
-    const auto parent = came_from.find(current);
-    if (parent == came_from.end()) {
-      return {};
-    }
-    current = parent->second;
-    if (!(current == start_index)) {
-      grid_path.push_back(fromGrid(current, config_.resolution));
+  grid_path.reserve(grid_indices.size());
+  for (std::size_t index = 0; index < grid_indices.size(); ++index) {
+    if (index == 0) {
+      grid_path.push_back(start);
+    } else if (index + 1 == grid_indices.size()) {
+      grid_path.push_back(goal);
+    } else {
+      grid_path.push_back(fromGrid(grid_indices[index], config_.resolution));
     }
   }
-  grid_path.push_back(start);
-  std::reverse(grid_path.begin(), grid_path.end());
 
   std::vector<Vec3> pruned;
   pruned.push_back(grid_path.front());
@@ -903,6 +1276,98 @@ std::vector<Vec3> VoxelPlanner::plan(const Vec3 & start, const Vec3 & goal) cons
     anchor = furthest;
   }
   return pruned;
+}
+
+std::vector<TimedTrajectoryState> sampleCollisionFreePolyline(
+  const std::vector<Vec3> & waypoints,
+  double sample_period_seconds,
+  double maximum_speed,
+  double maximum_acceleration)
+{
+  if (!std::isfinite(sample_period_seconds) || sample_period_seconds <= 0.0 ||
+    !std::isfinite(maximum_speed) || maximum_speed <= 0.0 ||
+    !std::isfinite(maximum_acceleration) || maximum_acceleration <= 0.0)
+  {
+    throw std::invalid_argument("polyline sampling limits must be finite and positive");
+  }
+  if (waypoints.empty()) {
+    return {};
+  }
+
+  std::vector<TimedTrajectoryState> samples;
+  samples.push_back({0.0, {waypoints.front(), {}, {}, 0.0}});
+  double elapsed = 0.0;
+  for (std::size_t index = 1; index < waypoints.size(); ++index) {
+    const Vec3 delta = waypoints[index] - waypoints[index - 1];
+    const double length = norm(delta);
+    if (!std::isfinite(length)) {
+      throw std::invalid_argument("polyline waypoints must be finite");
+    }
+    if (length <= 1e-9) {
+      continue;
+    }
+    const Vec3 direction = delta * (1.0 / length);
+    double acceleration_duration = maximum_speed / maximum_acceleration;
+    double acceleration_distance =
+      0.5 * maximum_acceleration * acceleration_duration * acceleration_duration;
+    double cruise_duration = 0.0;
+    double peak_speed = maximum_speed;
+    if (2.0 * acceleration_distance > length) {
+      acceleration_duration = std::sqrt(length / maximum_acceleration);
+      acceleration_distance =
+        0.5 * maximum_acceleration * acceleration_duration * acceleration_duration;
+      peak_speed = maximum_acceleration * acceleration_duration;
+    } else {
+      cruise_duration =
+        (length - 2.0 * acceleration_distance) / maximum_speed;
+    }
+    const double segment_duration =
+      2.0 * acceleration_duration + cruise_duration;
+    const std::size_t steps = std::max<std::size_t>(
+      1U, static_cast<std::size_t>(
+        std::ceil(segment_duration / sample_period_seconds)));
+    for (std::size_t step = 1; step <= steps; ++step) {
+      const double time =
+        segment_duration * static_cast<double>(step) / static_cast<double>(steps);
+      double travelled = 0.0;
+      double speed = 0.0;
+      double acceleration = 0.0;
+      if (step == steps) {
+        travelled = length;
+      } else if (time < acceleration_duration) {
+        travelled = 0.5 * maximum_acceleration * time * time;
+        speed = maximum_acceleration * time;
+        acceleration = maximum_acceleration;
+      } else if (time < acceleration_duration + cruise_duration) {
+        const double cruise_time = time - acceleration_duration;
+        travelled = acceleration_distance + peak_speed * cruise_time;
+        speed = peak_speed;
+      } else {
+        const double remaining = segment_duration - time;
+        travelled = length - 0.5 * maximum_acceleration * remaining * remaining;
+        speed = maximum_acceleration * remaining;
+        acceleration = -maximum_acceleration;
+      }
+      TrajectoryState state;
+      state.position = waypoints[index - 1] + direction * travelled;
+      state.velocity = direction * speed;
+      state.acceleration = direction * acceleration;
+      state.yaw = std::atan2(direction.y, direction.x);
+      samples.push_back({
+        elapsed + time,
+        state,
+      });
+    }
+    elapsed += segment_duration;
+  }
+  if (samples.size() == 1U) {
+    samples.front().state.velocity = {};
+    return samples;
+  }
+  samples.back().state.position = waypoints.back();
+  samples.back().state.velocity = {};
+  samples.back().state.acceleration = {};
+  return samples;
 }
 
 UniformBsplineTrajectory UniformBsplineTrajectory::fromWaypoints(
@@ -1020,7 +1485,16 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
     decision.reason = "odometry or point cloud missing for more than 1 second";
     return decision;
   }
+  if (phase_ == FlightPhase::HOLD &&
+    worst_data_age <= inputs.hold_timeout_seconds)
+  {
+    phase_ = resume_phase_;
+    decision.phase = phase_;
+    decision.reason = "navigation inputs recovered";
+    return decision;
+  }
   if (airborne_phase && worst_data_age > inputs.hold_timeout_seconds) {
+    resume_phase_ = phase_;
     phase_ = FlightPhase::HOLD;
     decision.phase = phase_;
     decision.hold_position = true;
@@ -1067,13 +1541,15 @@ SupervisorDecision FlightSupervisor::update(const SupervisorInputs & inputs)
       }
       break;
     case FlightPhase::VISUAL_ALIGN:
-      if (inputs.target_aligned) {
+      if (!inputs.target_visible) {
+        phase_ = FlightPhase::TARGET_SEARCH;
+      } else if (inputs.target_aligned) {
         phase_ = FlightPhase::DROP_HOLD;
       }
       break;
     case FlightPhase::DROP_HOLD:
       decision.command_open_bottom_door = true;
-      if (inputs.payload_released) {
+      if (inputs.payload_released && inputs.drop_release_settled) {
         phase_ = FlightPhase::RETURN;
       }
       break;

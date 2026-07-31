@@ -37,6 +37,39 @@ class HoverProbeCoreTest(unittest.TestCase):
             CORE.planner_map_ready("ACTIVE map_ready=true", 0.61, 0.6)
         )
 
+    def test_fixed_diagnostic_can_ignore_only_planner_dependent_streams(self):
+        ages = {
+            name: 0.1 for name in CORE.CONTINUOUS_FLIGHT_TOPICS
+        }
+        ages["pointcloud"] = 2.0
+        ages["planner_state"] = 2.0
+        self.assertEqual(
+            CORE.stale_flight_topics(
+                ages,
+                telemetry_timeout=1.5,
+                clock_timeout=5.0,
+                ignored_topics=("pointcloud", "planner_state"),
+            ),
+            [],
+        )
+        ages["nav_odometry"] = 2.0
+        self.assertEqual(
+            CORE.stale_flight_topics(
+                ages,
+                telemetry_timeout=1.5,
+                clock_timeout=5.0,
+                ignored_topics=("pointcloud", "planner_state"),
+            ),
+            ["nav_odometry"],
+        )
+        with self.assertRaises(ValueError):
+            CORE.stale_flight_topics(
+                ages,
+                telemetry_timeout=1.5,
+                clock_timeout=5.0,
+                ignored_topics=("nav_odometry",),
+            )
+
     def test_prearm_pose_gate_requires_calibrated_spawn_speed_and_tilt(self):
         limits = CORE.PrearmPoseLimits(
             expected_position=(4.55, -0.38, 1.13),
@@ -118,6 +151,14 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertFalse(CORE.fixed_step_reached(0.11, 0.03, 0.04))
         self.assertFalse(CORE.fixed_step_reached(0.04, 0.06, 0.04))
         self.assertFalse(CORE.fixed_step_reached(0.04, 0.03, 0.051))
+        self.assertFalse(
+            CORE.fixed_step_reached(
+                0.04,
+                0.03,
+                0.041,
+                max_speed_mps=0.04,
+            )
+        )
 
     def test_each_fixed_step_gets_a_fresh_timeout_origin(self):
         self.assertEqual(
@@ -127,6 +168,33 @@ class HoverProbeCoreTest(unittest.TestCase):
         self.assertEqual(
             CORE.advance_fixed_step(1, 2, 14.0, 10_000_000_000),
             (2, True, None, None),
+        )
+
+    def test_high_altitude_fixed_probe_requires_explicit_bounded_authority(self):
+        sequence = (0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.67)
+        self.assertFalse(
+            CORE.fixed_clearance_sequence_valid(
+                sequence,
+                hold_altitude_m=1.80,
+                home_altitude_m=1.13,
+                authorized_max_clearance_m=0.30,
+            )
+        )
+        self.assertTrue(
+            CORE.fixed_clearance_sequence_valid(
+                sequence,
+                hold_altitude_m=1.80,
+                home_altitude_m=1.13,
+                authorized_max_clearance_m=0.70,
+            )
+        )
+        self.assertFalse(
+            CORE.fixed_clearance_sequence_valid(
+                sequence + (0.71,),
+                hold_altitude_m=1.84,
+                home_altitude_m=1.13,
+                authorized_max_clearance_m=0.71,
+            )
         )
 
     def test_fixed_step_envelope_rejects_drift_drop_speed_and_tilt(self):
@@ -229,6 +297,211 @@ class HoverProbeCoreTest(unittest.TestCase):
                 (0.0, 0.0), nav_home, raw_home
             )
 
+    def test_live_raw_error_correction_rejects_estimator_drift_on_return(self):
+        raw_target = (4.55, -0.38, 1.21)
+        raw_position = (4.54, -0.355, 1.20)
+        nav_position = (0.012, -0.007, -0.071)
+        nav_target = CORE.live_raw_error_corrected_nav_target(
+            raw_target,
+            raw_position,
+            nav_position,
+        )
+        for actual, expected in zip(nav_target, (0.022, -0.032, -0.061)):
+            self.assertAlmostEqual(actual, expected)
+        with self.assertRaises(ValueError):
+            CORE.live_raw_error_corrected_nav_target(
+                raw_target,
+                raw_position[:2],
+                nav_position,
+            )
+
+    def test_live_frame_offset_filter_rejects_asynchronous_centimeter_jumps(self):
+        previous = (0.004, -0.003, -0.016)
+        observed = (0.024, -0.023, -0.006)
+        filtered = CORE.low_pass_frame_offset(
+            previous,
+            observed,
+            elapsed_seconds=0.1,
+            time_constant_seconds=2.0,
+            maximum_rate_mps=0.02,
+        )
+        update = tuple(
+            filtered[index] - previous[index] for index in range(3)
+        )
+        self.assertLessEqual(
+            sum(value * value for value in update) ** 0.5,
+            0.002 + 1e-12,
+        )
+        self.assertTrue(
+            all(
+                abs(filtered[index] - observed[index])
+                < abs(previous[index] - observed[index])
+                for index in range(3)
+            )
+        )
+        self.assertEqual(
+            CORE.low_pass_frame_offset(
+                filtered,
+                observed,
+                elapsed_seconds=0.0,
+                time_constant_seconds=2.0,
+                maximum_rate_mps=0.02,
+            ),
+            filtered,
+        )
+        with self.assertRaises(ValueError):
+            CORE.low_pass_frame_offset(
+                previous,
+                observed,
+                elapsed_seconds=0.1,
+                time_constant_seconds=0.0,
+                maximum_rate_mps=0.02,
+            )
+
+    def test_landing_frame_offset_is_frozen_on_first_return_sample(self):
+        home_raw = (4.55, -0.38, 1.13)
+        home_nav = (4.544, -0.377, 1.114)
+        live_at_return = (0.004, 0.005, -0.015)
+        frozen = CORE.freeze_landing_frame_offset(
+            None,
+            live_at_return,
+            home_raw,
+            home_nav,
+        )
+        self.assertEqual(frozen, live_at_return)
+        self.assertEqual(
+            CORE.freeze_landing_frame_offset(
+                frozen,
+                (-0.007, 0.014, -0.021),
+                home_raw,
+                home_nav,
+            ),
+            frozen,
+        )
+        self.assertEqual(
+            CORE.freeze_landing_frame_offset(
+                None,
+                None,
+                home_raw,
+                home_nav,
+            ),
+            (
+                home_nav[0] - home_raw[0],
+                home_nav[1] - home_raw[1],
+                home_nav[2] - home_raw[2],
+            ),
+        )
+        with self.assertRaises(ValueError):
+            CORE.freeze_landing_frame_offset(
+                None,
+                (float("nan"), 0.0, 0.0),
+                home_raw,
+                home_nav,
+            )
+
+    def test_landing_frame_capture_uses_hysteresis_at_the_truth_gate(self):
+        self.assertEqual(
+            CORE.landing_frame_capture_action(
+                frozen=False,
+                horizontal_error_m=0.020,
+                speed_mps=0.01,
+                capture_radius_m=0.008,
+                release_radius_m=0.012,
+            ),
+            "live",
+        )
+        self.assertEqual(
+            CORE.landing_frame_capture_action(
+                frozen=False,
+                horizontal_error_m=0.007,
+                speed_mps=0.009,
+                capture_radius_m=0.008,
+                release_radius_m=0.012,
+                maximum_capture_speed_mps=0.01,
+            ),
+            "capture",
+        )
+        self.assertEqual(
+            CORE.landing_frame_capture_action(
+                frozen=True,
+                horizontal_error_m=0.010,
+                speed_mps=0.01,
+                capture_radius_m=0.008,
+                release_radius_m=0.012,
+            ),
+            "hold",
+        )
+        self.assertEqual(
+            CORE.landing_frame_capture_action(
+                frozen=True,
+                horizontal_error_m=0.013,
+                speed_mps=0.01,
+                capture_radius_m=0.008,
+                release_radius_m=0.012,
+            ),
+            "release",
+        )
+        self.assertEqual(
+            CORE.landing_frame_capture_action(
+                frozen=False,
+                horizontal_error_m=0.007,
+                speed_mps=0.011,
+                capture_radius_m=0.008,
+                release_radius_m=0.012,
+                maximum_capture_speed_mps=0.01,
+            ),
+            "live",
+        )
+        with self.assertRaises(ValueError):
+            CORE.landing_frame_capture_action(
+                frozen=False,
+                horizontal_error_m=0.0,
+                speed_mps=0.0,
+                capture_radius_m=0.012,
+                release_radius_m=0.008,
+            )
+
+    def test_landing_target_freezes_without_a_capture_step(self):
+        raw_target = (4.55, -0.38, 1.21)
+        raw_position = (4.547, -0.374, 1.205)
+        nav_position = (0.010, -0.004, -0.077)
+        live_target = CORE.landing_nav_target(
+            raw_target,
+            raw_position,
+            nav_position,
+            frozen_offset=None,
+            horizontal_gain=2.0,
+        )
+        captured_offset = tuple(
+            live_target[index] - raw_target[index]
+            for index in range(3)
+        )
+        captured_target = CORE.landing_nav_target(
+            raw_target,
+            raw_position,
+            nav_position,
+            frozen_offset=captured_offset,
+            horizontal_gain=2.0,
+        )
+        changed_inputs_target = CORE.landing_nav_target(
+            raw_target,
+            (4.560, -0.390, 1.210),
+            (0.025, -0.020, -0.072),
+            frozen_offset=captured_offset,
+            horizontal_gain=2.0,
+        )
+        for expected, captured, changed in zip(
+            live_target,
+            captured_target,
+            changed_inputs_target,
+        ):
+            self.assertAlmostEqual(captured, expected)
+            self.assertAlmostEqual(changed, expected)
+        self.assertAlmostEqual(
+            live_target[0],
+            nav_position[0] + 2.0 * (raw_target[0] - raw_position[0]),
+        )
+
     def test_yaw_rate_envelope_rejects_nonfinite_and_excessive_rotation(self):
         self.assertTrue(CORE.yaw_rate_envelope_safe(0.0, 1.0))
         self.assertTrue(CORE.yaw_rate_envelope_safe(-1.0, 1.0))
@@ -319,18 +592,34 @@ class HoverProbeCoreTest(unittest.TestCase):
             CORE.cradle_touchdown_target(region, 1.13),
             (4.55, -0.38, 1.13),
         )
+        self.assertEqual(
+            CORE.cradle_approach_target(region, 1.13, 0.08),
+            (4.55, -0.38, 1.21),
+        )
+        with self.assertRaises(ValueError):
+            CORE.cradle_approach_target(region, 1.13, 0.0)
         self.assertTrue(
-            CORE.guided_touchdown_reached(0.004, 0.015, 0.05)
+            CORE.guided_touchdown_reached(
+                0.008,
+                0.015,
+                0.05,
+                guide_radius_m=0.008,
+            )
         )
         self.assertFalse(
-            CORE.guided_touchdown_reached(0.0041, 0.015, 0.05)
+            CORE.guided_touchdown_reached(
+                0.0081,
+                0.015,
+                0.05,
+                guide_radius_m=0.008,
+            )
         )
         self.assertFalse(
             CORE.guided_touchdown_reached(
                 0.003,
                 0.015,
                 0.05,
-                guide_radius_m=0.005,
+                guide_radius_m=0.0081,
             )
         )
 

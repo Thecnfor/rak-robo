@@ -6,7 +6,8 @@ Foxglove 始终常驻（端口 8765 固定）—— 调试时不必再开 / 关�
 
 用法:
     ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py
-    ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py record_bag:=true
+    ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py \
+      record_bag:=true bag_output:=/tmp/drone_competition_bag_<timestamp>
 """
 
 from pathlib import Path
@@ -28,10 +29,15 @@ def _launch(package: str, filename: str):
 
 def generate_launch_description() -> LaunchDescription:
     record_bag = LaunchConfiguration('record_bag')
+    bag_output = LaunchConfiguration('bag_output')
     report_path = LaunchConfiguration('interface_report_path')
     fixed_diagnostic = LaunchConfiguration('allow_fixed_setpoint_diagnostic')
     return LaunchDescription([
         DeclareLaunchArgument('record_bag', default_value='false'),
+        DeclareLaunchArgument(
+            'bag_output',
+            default_value='/tmp/drone_competition_bag',
+        ),
         DeclareLaunchArgument(
             'interface_report_path',
             default_value='/tmp/drone_interface_report.json',
@@ -67,14 +73,21 @@ def generate_launch_description() -> LaunchDescription:
         # rosbag 可选
         ExecuteProcess(
             cmd=[
-                'ros2', 'bag', 'record', '-o', '/tmp/drone_competition_bag',
+                'ros2', 'bag', 'record', '-o', bag_output, '--topics',
                 '/drone/navigation/odometry',
                 '/drone/navigation/state',
+                '/drone/navigation/executor_state',
+                '/drone/navigation/planner_state',
+                '/drone/navigation/px4_status',
+                '/drone/navigation/landed',
                 '/drone/navigation/planned_path',
                 '/drone/drop_target_offset',
                 '/avoidance/lidar/pointcloud',
+                '/drone0/state/pose',
+                '/drone0/state/twist',
                 '/fmu/out/vehicle_status_v1',
                 '/cargo_bay/status',
+                '/cargo_bay/payload_position',
             ],
             output='screen',
             condition=IfCondition(record_bag),

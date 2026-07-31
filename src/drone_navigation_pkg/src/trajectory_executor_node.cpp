@@ -41,6 +41,10 @@ public:
     land_timeout_ = declare_parameter<double>("data_land_timeout", 1.0);
     minimum_replan_execution_seconds_ = declare_parameter<double>(
       "minimum_replan_execution_seconds", 1.0);
+    phase_trajectory_endpoint_tolerance_ = declare_parameter<double>(
+      "phase_trajectory_endpoint_tolerance", 0.05);
+    return_altitude_preemption_margin_ = declare_parameter<double>(
+      "return_altitude_preemption_margin", 0.10);
     ground_disarm_delay_seconds_ = declare_parameter<double>(
       "ground_disarm_delay_seconds", 2.0);
     allow_fixed_setpoint_diagnostic_ = declare_parameter<bool>(
@@ -49,10 +53,14 @@ public:
       "allow_force_disarm_diagnostic", false);
     fixed_vertical_only_diagnostic_ = declare_parameter<bool>(
       "fixed_vertical_only_diagnostic", false);
+    guided_takeoff_vertical_only_ = declare_parameter<bool>(
+      "guided_takeoff_vertical_only", true);
     fixed_vertical_release_clearance_ = declare_parameter<double>(
-      "fixed_vertical_release_clearance", 0.03);
+      "fixed_vertical_release_clearance", 0.005);
     fixed_vertical_reengage_clearance_ = declare_parameter<double>(
-      "fixed_vertical_reengage_clearance", 0.02);
+      "fixed_vertical_reengage_clearance", 0.003);
+    fixed_handoff_xy_blend_seconds_ = declare_parameter<double>(
+      "fixed_handoff_xy_blend_seconds", 1.0);
     fixed_vertical_guide_height_ = declare_parameter<double>(
       "fixed_vertical_guide_height", 0.05);
     fixed_vertical_minimum_handoff_lead_ = declare_parameter<double>(
@@ -64,8 +72,12 @@ public:
     if (hold_timeout_ < 0.0 || land_timeout_ < hold_timeout_) {
       throw std::runtime_error("executor watchdog timeouts must be non-negative and ordered");
     }
-    if (minimum_replan_execution_seconds_ < 0.0) {
-      throw std::runtime_error("minimum replan execution time must be non-negative");
+    if (minimum_replan_execution_seconds_ < 0.0 ||
+      phase_trajectory_endpoint_tolerance_ < 0.0 ||
+      return_altitude_preemption_margin_ < 0.0)
+    {
+      throw std::runtime_error(
+              "replan execution time and endpoint tolerance must be non-negative");
     }
     if (ground_disarm_delay_seconds_ < 0.0) {
       throw std::runtime_error("ground disarm delay must be non-negative");
@@ -84,10 +96,13 @@ public:
         fixed_vertical_minimum_handoff_lead_))
     {
       throw std::runtime_error(
-              "fixed vertical control must hand over before the physical guide exit");
+              "fixed vertical control must hand over before leaving the physical guide");
     }
     if (fixed_vertical_guide_radius_ <= 0.0) {
       throw std::runtime_error("fixed_vertical_guide_radius must be positive");
+    }
+    if (fixed_handoff_xy_blend_seconds_ <= 0.0) {
+      throw std::runtime_error("fixed_handoff_xy_blend_seconds must be positive");
     }
     fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
     const auto origin = declare_parameter<std::vector<double>>(
@@ -112,6 +127,9 @@ public:
     mode_subscription_ = create_subscription<std_msgs::msg::String>(
       "/drone/navigation/control_mode", rclcpp::QoS(10).transient_local(),
       std::bind(&TrajectoryExecutorNode::onMode, this, std::placeholders::_1));
+    planner_state_subscription_ = create_subscription<std_msgs::msg::String>(
+      "/drone/navigation/planner_state", rclcpp::QoS(10).transient_local(),
+      std::bind(&TrajectoryExecutorNode::onPlannerState, this, std::placeholders::_1));
     visual_velocity_subscription_ = create_subscription<geometry_msgs::msg::TwistStamped>(
       "/drone/navigation/visual_velocity", rclcpp::QoS(10),
       std::bind(&TrajectoryExecutorNode::onVisualVelocity, this, std::placeholders::_1));
@@ -120,6 +138,11 @@ public:
     fixed_setpoint_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       fixed_setpoint_topic, rclcpp::QoS(1).transient_local(),
       std::bind(&TrajectoryExecutorNode::onFixedSetpoint, this, std::placeholders::_1));
+    const auto fixed_truth_pose_topic = declare_parameter<std::string>(
+      "fixed_truth_pose_topic", "/drone0/state/pose");
+    fixed_truth_pose_subscription_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      fixed_truth_pose_topic, rclcpp::SensorDataQoS(),
+      std::bind(&TrajectoryExecutorNode::onFixedTruthPose, this, std::placeholders::_1));
     odometry_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
       "/drone/navigation/odometry", rclcpp::QoS(20),
       std::bind(&TrajectoryExecutorNode::onOdometry, this, std::placeholders::_1));
@@ -166,12 +189,47 @@ private:
       return;
     }
     last_trajectory_ = steadyNow();
+    if (force_next_trajectory_ && !force_recovery_trajectory_ &&
+      have_trajectory_ && !trajectory_.points.empty())
+    {
+      const auto & current = trajectory_.points.back().position;
+      const auto & incoming = message->points.back().position;
+      if (!forcedTrajectoryEndpointChanged(
+          true, {current.x, current.y, current.z},
+          {incoming.x, incoming.y, incoming.z},
+          phase_trajectory_endpoint_tolerance_))
+      {
+        // Mode and goal are separate DDS topics. A final trajectory for the
+        // previous goal can arrive after the mode edge; keep the one-shot
+        // replacement token for the first trajectory with the new endpoint.
+        return;
+      }
+    }
     const double accepted_trajectory_age = trajectory_started_ ?
       std::max(0.0, (now() - trajectory_start_).seconds()) :
       std::numeric_limits<double>::infinity();
-    if (!shouldAcceptTrajectoryUpdate(
+    const double active_trajectory_duration =
+      have_trajectory_ && !trajectory_.points.empty() ?
+      durationSeconds(trajectory_.points.back().time_from_start) : 0.0;
+    const double replacement_delay = trajectoryReplacementDelay(
+      minimum_replan_execution_seconds_, active_trajectory_duration);
+    const auto minimum_altitude = [](const navigation_message::Trajectory & trajectory) {
+        double result = std::numeric_limits<double>::infinity();
+        for (const auto & point : trajectory.points) {
+          result = std::min(result, point.position.z);
+        }
+        return result;
+      };
+    const bool return_safety_preemption =
+      last_control_intent_label_ == "RETURN" && have_trajectory_ &&
+      trajectoryMinimumAltitudeImproves(
+      minimum_altitude(trajectory_), minimum_altitude(*message),
+      return_altitude_preemption_margin_);
+    if (!force_next_trajectory_ && !force_recovery_trajectory_ &&
+      !return_safety_preemption &&
+      !shouldAcceptTrajectoryUpdate(
         trajectory_started_, armed_, offboard_, accepted_trajectory_age,
-        minimum_replan_execution_seconds_))
+        replacement_delay))
     {
       return;
     }
@@ -181,12 +239,38 @@ private:
     if (trajectory_started_) {
       trajectory_start_ = now();
     }
-    publishState("TRAJECTORY_ACCEPTED id=" + std::to_string(message->trajectory_id));
+    force_next_trajectory_ = false;
+    const bool planner_recovery_preemption = force_recovery_trajectory_;
+    force_recovery_trajectory_ = false;
+    publishState(
+      "TRAJECTORY_ACCEPTED id=" + std::to_string(message->trajectory_id) +
+      (return_safety_preemption ? " reason=return_altitude_safety" :
+      (planner_recovery_preemption ? " reason=planner_recovery" : "")));
+  }
+
+  void onPlannerState(const std_msgs::msg::String::SharedPtr message)
+  {
+    if (plannerRecoveryAllowsTrajectoryReplacement(
+        last_planner_state_label_, message->data))
+    {
+      force_recovery_trajectory_ = true;
+    }
+    last_planner_state_label_ = message->data;
   }
 
   void onMode(const std_msgs::msg::String::SharedPtr message)
   {
     const std::string requested = message->data;
+    const bool trajectory_intent =
+      requested == "ARM_OFFBOARD" || requested == "TAKEOFF" ||
+      requested == "TRAJECTORY" || requested == "RETURN" ||
+      requested == "RETURN_ROUTE_UPDATE";
+    if (trajectory_intent && requested != last_control_intent_label_) {
+      // A mission-phase change carries a new goal and bypasses the
+      // same-trajectory replacement window exactly once.
+      force_next_trajectory_ = true;
+    }
+    last_control_intent_label_ = requested;
     if (requested == "FORCE_DISARM") {
       if (!forceDisarmDiagnosticAllowed(
           allow_force_disarm_diagnostic_, lifecycle_.state(), armed_, auto_land_))
@@ -210,6 +294,8 @@ private:
         return;
       }
       if (lifecycle_.state() == ExecutorFlightState::DISABLED) {
+        const bool guided_truth_required = fixed_request ?
+          fixed_vertical_only_diagnostic_ : guided_takeoff_vertical_only_;
         const bool control_source_ready = fixed_request ?
           fixedSetpointReady(
             allow_fixed_setpoint_diagnostic_, have_fixed_setpoint_,
@@ -217,11 +303,19 @@ private:
           (have_trajectory_ && ageOrInfinity(last_trajectory_) <= hold_timeout_);
         const bool fresh_inputs = have_odometry_ && control_source_ready &&
           ageOrInfinity(last_odometry_) <= hold_timeout_ &&
+          (!guided_truth_required ||
+          (have_fixed_truth_pose_ &&
+          ageOrInfinity(last_fixed_truth_pose_) <= hold_timeout_)) &&
           px4DiscreteStateUsable(have_status_, ageOrInfinity(last_odometry_), hold_timeout_);
         if (!fresh_inputs || !px4_ready_ || failsafe_ || !landed_known_ || !landed_ || armed_) {
           publishState("REJECTED arm_preflight_gate");
           return;
         }
+        // PX4 may briefly clear pre_flight_checks_pass while the accepted
+        // request transitions from a disarmed mode into Offboard. Preserve
+        // the successful entry gate only for this PRESTREAM attempt; PX4
+        // remains the final authority and can still reject the ARM command.
+        arm_preflight_accepted_ = true;
       }
       new_mode = fixed_request ? Mode::FIXED : Mode::TRAJECTORY;
       new_request = ExecutorRequestedMode::ARM_TRAJECTORY;
@@ -235,13 +329,15 @@ private:
       }
       new_mode = Mode::FIXED;
       new_request = ExecutorRequestedMode::TRAJECTORY;
-    } else if (requested == "TRAJECTORY" || requested == "TAKEOFF" || requested == "RETURN") {
+    } else if (requested == "TRAJECTORY" || requested == "TAKEOFF" ||
+      requested == "RETURN" || requested == "RETURN_ROUTE_UPDATE")
+    {
       new_mode = Mode::TRAJECTORY;
       new_request = ExecutorRequestedMode::TRAJECTORY;
     } else if (requested == "HOLD" || requested == "TARGET_SEARCH" || requested == "DROP_HOLD") {
       new_mode = Mode::HOLD;
       new_request = ExecutorRequestedMode::HOLD;
-    } else if (requested == "VISUAL") {
+    } else if (requested == "VISUAL" || requested == "RETURN_FINE") {
       new_mode = Mode::VISUAL;
       new_request = ExecutorRequestedMode::VISUAL;
     } else if (requested == "LAND") {
@@ -275,11 +371,21 @@ private:
       if (new_mode == Mode::HOLD && have_odometry_) {
         hold_position_ = current_position_;
       }
+      if (new_mode == Mode::VISUAL) {
+        visual_yaw_ = current_yaw_;
+      }
       if (new_request == ExecutorRequestedMode::ARM_TRAJECTORY) {
         prestream_started_ = steadyNow();
-        if (fixed_arm_request) {
-          fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
+        const bool guided_vertical_requested = fixed_arm_request ?
+          fixed_vertical_only_diagnostic_ : guided_takeoff_vertical_only_;
+        if (guided_vertical_requested) {
+          fixed_vertical_only_active_ = true;
           fixed_diagnostic_yaw_ = current_yaw_;
+          fixed_handoff_blend_active_ = false;
+          have_fixed_truth_origin_ = have_fixed_truth_pose_;
+          if (have_fixed_truth_origin_) {
+            fixed_truth_origin_ = fixed_truth_position_;
+          }
         }
       }
       mode_ = new_mode;
@@ -289,7 +395,12 @@ private:
       have_trajectory_ = false;
       trajectory_started_ = false;
       have_fixed_setpoint_ = false;
-      fixed_vertical_only_active_ = fixed_vertical_only_diagnostic_;
+      fixed_vertical_only_active_ = false;
+      fixed_handoff_blend_active_ = false;
+      have_fixed_truth_origin_ = false;
+      force_next_trajectory_ = false;
+      force_recovery_trajectory_ = false;
+      last_control_intent_label_.clear();
     }
     requested_mode_ = new_request;
   }
@@ -349,6 +460,19 @@ private:
     last_odometry_ = steadyNow();
   }
 
+  void onFixedTruthPose(const geometry_msgs::msg::PoseStamped::SharedPtr message)
+  {
+    const auto & position = message->pose.position;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+      !std::isfinite(position.z))
+    {
+      return;
+    }
+    fixed_truth_position_ = {position.x, position.y, position.z};
+    have_fixed_truth_pose_ = true;
+    last_fixed_truth_pose_ = steadyNow();
+  }
+
   void onVehicleStatus(const px4_msgs::msg::VehicleStatus::SharedPtr message)
   {
     armed_ = message->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
@@ -391,7 +515,9 @@ private:
       const bool trajectory_expected =
         (mode_ == Mode::TRAJECTORY || mode_ == Mode::FIXED) && armed_ && offboard_;
       const double control_source_age = mode_ == Mode::FIXED ?
-        ageOrInfinity(last_fixed_setpoint_) : ageOrInfinity(last_trajectory_);
+        ageOrInfinity(last_fixed_setpoint_) :
+        trajectoryControlSourceAge(
+          have_trajectory_, trajectory_started_, ageOrInfinity(last_trajectory_));
       const auto safety_action = executorSafetyAction(
         trajectory_expected,
         ageOrInfinity(last_odometry_),
@@ -442,8 +568,9 @@ private:
           px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0F, 6.0F);
       last_mode_command_ = steadyNow();
     }
-    if (decision.request_arm && px4_ready_ && !failsafe_ &&
-      ageOrInfinity(last_arm_command_) >= 1.0)
+    if (armCommandAllowed(
+        decision.request_arm, arm_preflight_accepted_, failsafe_,
+        ageOrInfinity(last_arm_command_)))
     {
       publishVehicleCommand(
         px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0F);
@@ -490,6 +617,9 @@ private:
         px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0F, 4.0F, 3.0F);
       last_loiter_command_ = steadyNow();
       publishState("RESET_LOITER_COMMAND_SENT");
+    }
+    if (decision.state != ExecutorFlightState::PRESTREAM) {
+      arm_preflight_accepted_ = false;
     }
     publishLifecycleState(decision.state);
   }
@@ -568,7 +698,7 @@ private:
         static_cast<float>(ned_velocity.x),
         static_cast<float>(ned_velocity.y),
         static_cast<float>(ned_velocity.z)};
-      setpoint.yaw = 0.0F;
+      setpoint.yaw = static_cast<float>(yawEnuToNed(visual_yaw_));
     } else {
       auto state = holdState();
       if (mode_ == Mode::FIXED && have_fixed_setpoint_) {
@@ -581,36 +711,76 @@ private:
       state_ned.velocity = enuToNed(state.velocity);
       state_ned.acceleration = enuToNed(state.acceleration);
       state_ned.yaw = yawEnuToNed(state.yaw);
-      const bool vertical_capable_mode = mode_ == Mode::FIXED || mode_ == Mode::HOLD;
+      const bool vertical_control_enabled =
+        mode_ == Mode::FIXED ? fixed_vertical_only_diagnostic_ :
+        guided_takeoff_vertical_only_;
+      const bool vertical_capable_mode =
+        mode_ == Mode::FIXED || mode_ == Mode::HOLD || mode_ == Mode::TRAJECTORY;
       if (vertical_capable_mode) {
         const bool previous_vertical_only = fixed_vertical_only_active_;
-        const double horizontal_from_origin = std::hypot(
+        const double estimated_horizontal_from_origin = std::hypot(
           current_position_.x - map_origin_.x,
           current_position_.y - map_origin_.y);
+        const double estimated_clearance = current_position_.z - map_origin_.z;
+        const bool truth_fresh =
+          have_fixed_truth_pose_ && have_fixed_truth_origin_ &&
+          ageOrInfinity(last_fixed_truth_pose_) <= hold_timeout_;
+        const double truth_horizontal_from_origin = truth_fresh ?
+          std::hypot(
+          fixed_truth_position_.x - fixed_truth_origin_.x,
+          fixed_truth_position_.y - fixed_truth_origin_.y) :
+          std::numeric_limits<double>::quiet_NaN();
+        const double truth_clearance = truth_fresh ?
+          fixed_truth_position_.z - fixed_truth_origin_.z :
+          std::numeric_limits<double>::quiet_NaN();
+        const double handoff_clearance = trustedLiftClearance(
+          estimated_clearance, truth_fresh, truth_clearance);
+        const double guided_horizontal = truth_fresh ?
+          truth_horizontal_from_origin : estimated_horizontal_from_origin;
         fixed_vertical_only_active_ = verticalOnlyDiagnosticActive(
-          fixed_vertical_only_diagnostic_,
+          vertical_control_enabled,
           fixed_vertical_only_active_,
-          horizontal_from_origin <= fixed_vertical_guide_radius_,
-          current_position_.z - map_origin_.z,
+          guided_horizontal <= fixed_vertical_guide_radius_,
+          handoff_clearance,
           fixed_vertical_release_clearance_,
           fixed_vertical_reengage_clearance_);
         if (previous_vertical_only && !fixed_vertical_only_active_) {
-          // The guide prevents real yaw motion but the estimator can drift.
-          // Capture the live estimate only when the guide is cleared so full
-          // heading control starts with zero error instead of releasing an
-          // accumulated yaw command.
+          // The guide prevents real XY/yaw motion while the estimator can
+          // drift. Capture the live estimate so the first full-position
+          // setpoint is bumpless, then blend back to the requested XY target
+          // in simulation time instead of releasing a stored position error.
           fixed_diagnostic_yaw_ = current_yaw_;
+          fixed_handoff_offset_enu_ =
+            (current_position_ - map_origin_) - state.position;
+          fixed_handoff_started_ = now();
+          fixed_handoff_blend_active_ = true;
+        } else if (!previous_vertical_only && fixed_vertical_only_active_) {
+          fixed_handoff_blend_active_ = false;
         }
         if (fixed_vertical_only_active_ != previous_vertical_only) {
           publishState(
             std::string("FIXED_CONTROL vertical_only=") +
             (fixed_vertical_only_active_ ? "true" : "false") +
-            " clearance=" + std::to_string(current_position_.z - map_origin_.z));
+            " clearance=" + std::to_string(handoff_clearance) +
+            " estimated_clearance=" + std::to_string(estimated_clearance) +
+            " truth_clearance=" + std::to_string(truth_clearance));
         }
       }
       const bool vertical_only_diagnostic = vertical_capable_mode &&
         fixed_vertical_only_active_;
-      if (fixed_vertical_only_diagnostic_ && vertical_capable_mode) {
+      if (!vertical_only_diagnostic && vertical_capable_mode &&
+        fixed_handoff_blend_active_)
+      {
+        const double scale = fixedHandoffBlendScale(
+          (now() - fixed_handoff_started_).seconds(),
+          fixed_handoff_xy_blend_seconds_);
+        state_ned.position =
+          state_ned.position + enuToNed(fixed_handoff_offset_enu_ * scale);
+        if (scale <= 0.0) {
+          fixed_handoff_blend_active_ = false;
+        }
+      }
+      if (vertical_control_enabled && vertical_capable_mode) {
         state_ned.yaw = yawEnuToNed(fixed_diagnostic_yaw_);
       }
       const auto control_setpoint = fixedDiagnosticControlSetpoint(
@@ -695,10 +865,13 @@ private:
   double hold_timeout_{0.3};
   double land_timeout_{1.0};
   double minimum_replan_execution_seconds_{1.0};
+  double phase_trajectory_endpoint_tolerance_{0.05};
+  double return_altitude_preemption_margin_{0.10};
   double ground_disarm_delay_seconds_{2.0};
   double fixed_setpoint_timeout_{0.6};
-  double fixed_vertical_release_clearance_{0.03};
-  double fixed_vertical_reengage_clearance_{0.02};
+  double fixed_vertical_release_clearance_{0.005};
+  double fixed_vertical_reengage_clearance_{0.003};
+  double fixed_handoff_xy_blend_seconds_{1.0};
   double fixed_vertical_guide_height_{0.05};
   double fixed_vertical_minimum_handoff_lead_{0.005};
   double fixed_vertical_guide_radius_{0.004};
@@ -706,8 +879,11 @@ private:
   bool allow_fixed_setpoint_diagnostic_{false};
   bool allow_force_disarm_diagnostic_{false};
   bool fixed_vertical_only_diagnostic_{false};
+  bool guided_takeoff_vertical_only_{true};
   bool fixed_vertical_only_active_{false};
+  bool fixed_handoff_blend_active_{false};
   bool force_disarm_requested_{false};
+  bool arm_preflight_accepted_{false};
   Vec3 map_origin_;
   Mode mode_{Mode::DISABLED};
   ExecutorRequestedMode requested_mode_{ExecutorRequestedMode::DISABLED};
@@ -715,7 +891,11 @@ private:
   navigation_message::Trajectory trajectory_;
   bool have_trajectory_{false};
   bool have_fixed_setpoint_{false};
+  bool have_fixed_truth_pose_{false};
+  bool have_fixed_truth_origin_{false};
   bool trajectory_started_{false};
+  bool force_next_trajectory_{false};
+  bool force_recovery_trajectory_{false};
   bool have_odometry_{false};
   bool armed_{false};
   bool offboard_{false};
@@ -727,13 +907,20 @@ private:
   bool have_status_{false};
   bool failsafe_{false};
   Vec3 current_position_;
+  Vec3 fixed_truth_position_;
+  Vec3 fixed_truth_origin_;
   double current_yaw_{0.0};
   double fixed_diagnostic_yaw_{0.0};
+  double visual_yaw_{0.0};
+  Vec3 fixed_handoff_offset_enu_;
   Vec3 hold_position_;
   Vec3 visual_velocity_;
   Vec3 fixed_position_;
   double fixed_yaw_{0.0};
+  std::string last_control_intent_label_;
+  std::string last_planner_state_label_;
   rclcpp::Time trajectory_start_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time fixed_handoff_started_{0, 0, RCL_ROS_TIME};
   SteadyTime prestream_started_{};
   SteadyTime last_mode_command_{};
   SteadyTime last_arm_command_{};
@@ -742,6 +929,7 @@ private:
   SteadyTime last_loiter_command_{};
   SteadyTime last_visual_velocity_{};
   SteadyTime last_fixed_setpoint_{};
+  SteadyTime last_fixed_truth_pose_{};
   SteadyTime last_odometry_{};
   SteadyTime last_control_intent_{};
   SteadyTime last_trajectory_{};
@@ -753,8 +941,11 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;
   rclcpp::Subscription<navigation_message::Trajectory>::SharedPtr trajectory_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscription_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planner_state_subscription_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr visual_velocity_subscription_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr fixed_setpoint_subscription_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+    fixed_truth_pose_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscription_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr status_subscription_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_subscription_;

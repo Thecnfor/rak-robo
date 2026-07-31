@@ -1,6 +1,5 @@
 """Arena state aggregation plus public drone and cargo action adapters."""
 
-import asyncio
 import math
 import time
 from typing import Optional
@@ -12,6 +11,7 @@ import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.task import Future
 from std_msgs.msg import Bool, String
 
 from .cargo_contract import cargo_command_and_expected
@@ -114,6 +114,20 @@ class AirGroundOrchestrator(Node):
         self._pose = pose
         if self._home is None and self._landed:
             self._home = pose
+
+    async def _cooperative_sleep(self, seconds: float) -> None:
+        """Yield to rclpy without depending on an external asyncio event loop."""
+        future = Future()
+
+        def wake() -> None:
+            if not future.done():
+                future.set_result(None)
+
+        timer = self.create_timer(seconds, wake)
+        try:
+            await future
+        finally:
+            self.destroy_timer(timer)
 
     def _publish_arena_state(self) -> None:
         message = String()
@@ -236,7 +250,7 @@ class AirGroundOrchestrator(Node):
                 result.reason = 'command completed'
                 goal_handle.succeed()
                 return self._finish_flight_result(result)
-            await asyncio.sleep(0.05)
+            await self._cooperative_sleep(0.05)
         result.reason = 'command timeout'
         self._publish_mode('LAND')
         goal_handle.abort()
@@ -272,7 +286,7 @@ class AirGroundOrchestrator(Node):
                 result.reason = 'door command confirmed'
                 goal_handle.succeed()
                 return result
-            await asyncio.sleep(0.1)
+            await self._cooperative_sleep(0.1)
         result.final_state = self._cargo_state
         result.reason = 'door command timeout'
         goal_handle.abort()

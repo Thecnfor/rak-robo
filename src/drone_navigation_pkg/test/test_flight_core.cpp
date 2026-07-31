@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "drone_navigation_pkg/flight_core.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -26,10 +27,25 @@ using drone_navigation::VoxelPlanner;
 using drone_navigation::executorSafetyAction;
 using drone_navigation::boolTokenValue;
 using drone_navigation::fixedDiagnosticControlSetpoint;
+using drone_navigation::fixedHandoffBlendScale;
 using drone_navigation::fixedSetpointReady;
+using drone_navigation::forcedTrajectoryEndpointChanged;
+using drone_navigation::rawErrorCorrectedNavigationTarget;
+using drone_navigation::returnRouteRawTarget;
+using drone_navigation::returnFineAlignmentReady;
+using drone_navigation::returnTransitWaypointReached;
+using drone_navigation::shouldResetReturnTransitWaypoint;
+using drone_navigation::stagedReturnRawTarget;
+using drone_navigation::trajectoryMinimumAltitudeImproves;
+using drone_navigation::plannerRecoveryAllowsTrajectoryReplacement;
+using drone_navigation::positionAlignmentVelocityEnu;
+using drone_navigation::sampleCollisionFreePolyline;
+using drone_navigation::trustedLiftClearance;
 using drone_navigation::nextMonotonicTimestampMicros;
 using drone_navigation::verticalOnlyDiagnosticActive;
 using drone_navigation::verticalOnlyHandoffConfigurationSafe;
+using drone_navigation::visualAlignmentVelocityEnu;
+using drone_navigation::visualTargetRecent;
 
 namespace
 {
@@ -62,6 +78,154 @@ TEST(CoordinateFrames, ConvertsNedFrdToEnuFlu)
     ros.attitude_flu_to_enu.z * ros.attitude_flu_to_enu.z +
     ros.attitude_flu_to_enu.w * ros.attitude_flu_to_enu.w);
   EXPECT_NEAR(quaternion_norm, 1.0, kTolerance);
+}
+
+TEST(VisualAlignment, RotatesImageErrorIntoEnuWithoutChangingAxes)
+{
+  const auto yaw_zero = visualAlignmentVelocityEnu(0.4, -0.2, 0.0, 0.5, 0.3);
+  EXPECT_NEAR(yaw_zero.x, 0.2, kTolerance);
+  EXPECT_NEAR(yaw_zero.y, 0.1, kTolerance);
+  EXPECT_NEAR(yaw_zero.z, 0.0, kTolerance);
+
+  const auto yaw_ninety = visualAlignmentVelocityEnu(
+    0.4, -0.2, kPi / 2.0, 0.5, 0.3);
+  EXPECT_NEAR(yaw_ninety.x, -0.1, kTolerance);
+  EXPECT_NEAR(yaw_ninety.y, 0.2, kTolerance);
+
+  const auto saturated = visualAlignmentVelocityEnu(1.0, -1.0, 0.0, 2.0, 0.25);
+  EXPECT_NEAR(saturated.x, 0.25, kTolerance);
+  EXPECT_NEAR(saturated.y, 0.25, kTolerance);
+}
+
+TEST(VisualAlignment, BriefDetectionDropoutUsesOnlyTheLastValidObservation)
+{
+  EXPECT_TRUE(visualTargetRecent(true, 0.0, 0.6));
+  EXPECT_TRUE(visualTargetRecent(true, 0.59, 0.6));
+  EXPECT_FALSE(visualTargetRecent(true, 0.61, 0.6));
+  EXPECT_FALSE(visualTargetRecent(false, 0.0, 0.6));
+  EXPECT_FALSE(visualTargetRecent(
+    true, std::numeric_limits<double>::infinity(), 0.6));
+  EXPECT_FALSE(visualTargetRecent(true, 0.1, -0.1));
+}
+
+TEST(ReturnGuidance, AppliesRawTruthErrorInTheNavigationFrame)
+{
+  const auto target = rawErrorCorrectedNavigationTarget(
+    {4.55, -0.38, 1.185},
+    {4.60, -0.35, 1.20},
+    {4.58, -0.32, 1.19},
+    2.0);
+  EXPECT_NEAR(target.x, 4.48, kTolerance);
+  EXPECT_NEAR(target.y, -0.38, kTolerance);
+  EXPECT_NEAR(target.z, 1.175, kTolerance);
+}
+
+TEST(ReturnGuidance, KeepsCruiseClearanceUntilInsideTheDescentRadius)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  const auto target = stagedReturnRawTarget(
+    home, {5.40, -2.33, 1.80}, 0.67, 0.055, 0.20);
+
+  EXPECT_NEAR(target.x, home.x, kTolerance);
+  EXPECT_NEAR(target.y, home.y, kTolerance);
+  EXPECT_NEAR(target.z, 1.80, kTolerance);
+}
+
+TEST(ReturnGuidance, UsesApproachClearanceOnlyInsideTheDescentRadius)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  const auto target = stagedReturnRawTarget(
+    home, {4.68, -0.48, 1.80}, 0.67, 0.055, 0.20);
+
+  EXPECT_NEAR(target.x, home.x, kTolerance);
+  EXPECT_NEAR(target.y, home.y, kTolerance);
+  EXPECT_NEAR(target.z, 1.185, kTolerance);
+}
+
+TEST(ReturnGuidance, UsesTransitWaypointBeforeRoutingHome)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  const Vec3 waypoint{5.50, -1.70, 1.80};
+  const Vec3 approach{4.55, -0.75, 1.80};
+  const auto target = returnRouteRawTarget(
+    home, {5.51, -3.50, 1.78}, waypoint, approach, false, 0.45,
+    0.67, 0.055, 0.20);
+
+  EXPECT_NEAR(target.x, waypoint.x, kTolerance);
+  EXPECT_NEAR(target.y, waypoint.y, kTolerance);
+  EXPECT_NEAR(target.z, waypoint.z, kTolerance);
+}
+
+TEST(ReturnGuidance, RoutesToClearApproachPoseAfterTransitWaypointIsLatched)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  const Vec3 waypoint{5.50, -1.70, 1.80};
+  const Vec3 approach{4.55, -0.75, 1.80};
+  const auto target = returnRouteRawTarget(
+    home, {5.49, -1.68, 1.79}, waypoint, approach, true, 0.45,
+    0.67, 0.055, 0.20);
+
+  EXPECT_NEAR(target.x, approach.x, kTolerance);
+  EXPECT_NEAR(target.y, approach.y, kTolerance);
+  EXPECT_NEAR(target.z, approach.z, kTolerance);
+}
+
+TEST(ReturnGuidance, RoutesHomeOnlyInsideFineAlignmentRadius)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  const Vec3 waypoint{5.50, -1.70, 1.80};
+  const Vec3 approach{4.55, -0.75, 1.80};
+  const auto target = returnRouteRawTarget(
+    home, {4.55, -0.74, 1.80}, waypoint, approach, true, 0.45,
+    0.67, 0.055, 0.02);
+
+  EXPECT_NEAR(target.x, home.x, kTolerance);
+  EXPECT_NEAR(target.y, home.y, kTolerance);
+  EXPECT_NEAR(target.z, 1.80, kTolerance);
+}
+
+TEST(ReturnGuidance, FineAlignmentEntryDependsOnlyOnHorizontalApproach)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+  EXPECT_TRUE(returnFineAlignmentReady(
+      home, {4.55, -0.75, 1.80}, 0.45));
+  EXPECT_FALSE(returnFineAlignmentReady(
+      home, {4.55, -0.84, 1.20}, 0.45));
+}
+
+TEST(ReturnGuidance, TransitWaypointRequiresHorizontalAndVerticalAgreement)
+{
+  const Vec3 waypoint{5.50, -1.70, 1.80};
+  EXPECT_TRUE(returnTransitWaypointReached(
+      {5.61, -1.79, 1.88}, waypoint, 0.15, 0.10));
+  EXPECT_FALSE(returnTransitWaypointReached(
+      {5.66, -1.70, 1.80}, waypoint, 0.15, 0.10));
+  EXPECT_FALSE(returnTransitWaypointReached(
+      {5.50, -1.70, 1.91}, waypoint, 0.15, 0.10));
+}
+
+TEST(ReturnGuidance, ResetsTransitWaypointOnlyForInitialDropToReturnEdge)
+{
+  EXPECT_TRUE(shouldResetReturnTransitWaypoint(
+    FlightPhase::DROP_HOLD, FlightPhase::RETURN));
+  EXPECT_FALSE(shouldResetReturnTransitWaypoint(
+    FlightPhase::HOLD, FlightPhase::RETURN));
+  EXPECT_FALSE(shouldResetReturnTransitWaypoint(
+    FlightPhase::RETURN, FlightPhase::RETURN));
+}
+
+TEST(ReturnGuidance, FineAlignmentClampsHorizontalAndVerticalVelocity)
+{
+  const auto velocity = positionAlignmentVelocityEnu(
+    {4.0, 0.0, 1.5}, {4.3, -0.4, 1.0}, 1.0, 0.10, 0.05);
+  EXPECT_NEAR(std::hypot(velocity.x, velocity.y), 0.10, kTolerance);
+  EXPECT_NEAR(velocity.z, -0.05, kTolerance);
+
+  const auto small = positionAlignmentVelocityEnu(
+    {4.54, -0.37, 1.18}, {4.55, -0.38, 1.185}, 0.4, 0.10, 0.05);
+  EXPECT_NEAR(small.x, 0.004, kTolerance);
+  EXPECT_NEAR(small.y, -0.004, kTolerance);
+  EXPECT_NEAR(small.z, 0.002, kTolerance);
 }
 
 TEST(Px4MessageTimestamp, AdvancesWhenSimulationClockFreezesOrMovesBackward)
@@ -103,6 +267,79 @@ TEST(VoxelPlanner, DetoursAroundInflatedObstacle)
   }
 }
 
+TEST(VoxelPlanner, UnreachableGoalHonorsExpansionBudget)
+{
+  PlannerConfig config;
+  config.resolution = 0.1;
+  config.inflation_radius = 0.2;
+  config.horizontal_range = 5.5;
+  config.vertical_range = 4.5;
+  config.virtual_ceiling = 2.9;
+  config.max_expanded_voxels = 100;
+  VoxelPlanner planner(config);
+
+  std::vector<Vec3> sealed_wall;
+  for (double y = -5.5; y <= 5.5; y += 0.1) {
+    for (double z = 0.0; z <= 2.9; z += 0.1) {
+      sealed_wall.push_back({1.0, y, z});
+    }
+  }
+  planner.setObstacles(sealed_wall);
+
+  const auto started = std::chrono::steady_clock::now();
+  const auto path = planner.plan({0.0, 0.0, 1.8}, {2.0, 0.0, 1.8});
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_TRUE(path.empty());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(250));
+}
+
+TEST(VoxelPlanner, FindsWideDetourWithinCompetitionExpansionBudget)
+{
+  PlannerConfig config;
+  config.resolution = 0.1;
+  config.inflation_radius = 0.25;
+  config.horizontal_range = 5.5;
+  config.vertical_range = 4.5;
+  config.virtual_ceiling = 2.9;
+  config.max_expanded_voxels = 20000;
+  VoxelPlanner planner(config);
+
+  std::vector<Vec3> wall;
+  for (double y = -2.0; y <= 2.0; y += 0.1) {
+    for (double z = 0.0; z <= 2.9; z += 0.1) {
+      wall.push_back({2.0, y, z});
+    }
+  }
+  planner.setObstacles(wall);
+
+  const auto path = planner.plan({0.0, 0.0, 1.8}, {4.0, 0.0, 1.8});
+
+  ASSERT_GE(path.size(), 3U);
+  for (std::size_t index = 1; index < path.size(); ++index) {
+    EXPECT_TRUE(planner.collisionFree(path[index - 1], path[index]));
+  }
+}
+
+TEST(VoxelPlanner, OccupiedGoalFailsBeforeSearchExpansion)
+{
+  PlannerConfig config;
+  config.resolution = 0.1;
+  config.inflation_radius = 0.25;
+  config.horizontal_range = 5.5;
+  config.vertical_range = 4.5;
+  config.max_expanded_voxels = 200000;
+  VoxelPlanner planner(config);
+  planner.setObstacles({{2.0, 0.0, 1.8}});
+
+  const auto started = std::chrono::steady_clock::now();
+  const auto path = planner.plan({0.0, 0.0, 1.8}, {2.0, 0.0, 1.8});
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_TRUE(path.empty());
+  EXPECT_LT(elapsed, std::chrono::milliseconds(50));
+}
+
 TEST(RollingVoxelMap, RetainsRecentObstaclesAcrossSparseFramesAndExpiresThem)
 {
   RollingVoxelMap map(0.1, 1.0);
@@ -134,6 +371,49 @@ TEST(UniformBsplineTrajectory, HonorsEndpointsAndDynamicLimits)
   }
 }
 
+TEST(PolylineFallback, StopsAtEveryCollisionFreeCornerAndHonorsDynamicLimits)
+{
+  const std::vector<Vec3> path{{0.0, 0.0, 1.0}, {1.0, 0.0, 1.0}, {1.0, 1.0, 1.0}};
+  constexpr double kSamplePeriod = 0.05;
+  constexpr double kMaximumSpeed = 0.3;
+  constexpr double kMaximumAcceleration = 0.6;
+  const auto samples = sampleCollisionFreePolyline(
+    path, kSamplePeriod, kMaximumSpeed, kMaximumAcceleration);
+  ASSERT_GT(samples.size(), 3U);
+  EXPECT_NEAR(samples.front().state.position.x, 0.0, kTolerance);
+  EXPECT_NEAR(samples.back().state.position.x, 1.0, kTolerance);
+  EXPECT_NEAR(samples.back().state.position.y, 1.0, kTolerance);
+  bool saw_corner = false;
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    EXPECT_LE(
+      drone_navigation::norm(samples[index].state.velocity),
+      kMaximumSpeed + kTolerance);
+    EXPECT_LE(
+      drone_navigation::norm(samples[index].state.acceleration),
+      kMaximumAcceleration + kTolerance);
+    if (drone_navigation::distance(samples[index].state.position, path[1]) <= kTolerance) {
+      saw_corner = true;
+      EXPECT_NEAR(
+        drone_navigation::norm(samples[index].state.velocity), 0.0, kTolerance);
+    }
+    if (index == 0U) {
+      continue;
+    }
+    EXPECT_GT(
+      samples[index].time_from_start_seconds,
+      samples[index - 1].time_from_start_seconds);
+    const double step_distance = drone_navigation::distance(
+      samples[index - 1].state.position, samples[index].state.position);
+    const double step_time =
+      samples[index].time_from_start_seconds -
+      samples[index - 1].time_from_start_seconds;
+    EXPECT_LE(step_distance, kMaximumSpeed * step_time + kTolerance);
+  }
+  EXPECT_TRUE(saw_corner);
+  EXPECT_NEAR(
+    drone_navigation::norm(samples.back().state.velocity), 0.0, kTolerance);
+}
+
 TEST(FlightSupervisor, EnforcesDoorAndDataFreshnessSafetyGates)
 {
   FlightSupervisor supervisor;
@@ -156,6 +436,13 @@ TEST(FlightSupervisor, EnforcesDoorAndDataFreshnessSafetyGates)
   EXPECT_EQ(stale.phase, FlightPhase::HOLD);
   EXPECT_TRUE(stale.hold_position);
 
+  inputs.odometry_age_seconds = 0.1;
+  const auto recovered = supervisor.update(inputs);
+  EXPECT_EQ(recovered.phase, FlightPhase::TAKEOFF);
+  EXPECT_FALSE(recovered.hold_position);
+
+  inputs.odometry_age_seconds = 0.31;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::HOLD);
   inputs.odometry_age_seconds = 1.1;
   const auto lost = supervisor.update(inputs);
   EXPECT_TRUE(lost.request_land);
@@ -214,6 +501,8 @@ TEST(FlightSupervisor, RunsNominalMissionSequence)
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::DROP_HOLD);
   EXPECT_TRUE(supervisor.update(inputs).command_open_bottom_door);
   inputs.payload_released = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::DROP_HOLD);
+  inputs.drop_release_settled = true;
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::RETURN);
   inputs.at_home = true;
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
@@ -221,6 +510,29 @@ TEST(FlightSupervisor, RunsNominalMissionSequence)
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::LAND);
   inputs.armed = false;
   EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::COMPLETE);
+}
+
+TEST(FlightSupervisor, ReacquiresTargetAfterVisualLoss)
+{
+  FlightSupervisor supervisor;
+  SupervisorInputs inputs;
+  inputs.mission_requested = true;
+  inputs.ground_task_complete = true;
+  supervisor.update(inputs);
+  inputs.side_door_closed = true;
+  inputs.px4_ready = true;
+  supervisor.update(inputs);
+  inputs.armed = true;
+  inputs.offboard = true;
+  supervisor.update(inputs);
+  inputs.at_takeoff_pose = true;
+  supervisor.update(inputs);
+  inputs.at_search_pose = true;
+  supervisor.update(inputs);
+  inputs.target_visible = true;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::VISUAL_ALIGN);
+  inputs.target_visible = false;
+  EXPECT_EQ(supervisor.update(inputs).phase, FlightPhase::TARGET_SEARCH);
 }
 
 TEST(FlightSupervisor, LandsOnPx4FailsafeWhileAirborne)
@@ -286,7 +598,7 @@ TEST(ExecutorFixedDiagnostic, VerticalOnlyAvoidsConstrainedPositionAndYawWindup)
   EXPECT_DOUBLE_EQ(full.yaw, 1.2);
 }
 
-TEST(ExecutorFixedDiagnostic, HandsPositionControlOverBeforeGuideExitWithHysteresis)
+TEST(ExecutorFixedDiagnostic, UsesClearanceHysteresisForHorizontalHandoff)
 {
   EXPECT_FALSE(verticalOnlyDiagnosticActive(false, true, true, 0.0, 0.17, 0.16));
   EXPECT_TRUE(verticalOnlyDiagnosticActive(true, true, false, 0.0, 0.17, 0.16));
@@ -300,11 +612,41 @@ TEST(ExecutorFixedDiagnostic, HandsPositionControlOverBeforeGuideExitWithHystere
       true, false, true, std::numeric_limits<double>::quiet_NaN(), 0.17, 0.16));
 }
 
+TEST(ExecutorFixedDiagnostic, PrefersFreshPhysicalLiftWitness)
+{
+  EXPECT_DOUBLE_EQ(trustedLiftClearance(0.002, true, 0.006), 0.006);
+  EXPECT_DOUBLE_EQ(trustedLiftClearance(0.006, true, 0.002), 0.002);
+  EXPECT_DOUBLE_EQ(trustedLiftClearance(0.002, false, 0.006), 0.002);
+  EXPECT_DOUBLE_EQ(
+    trustedLiftClearance(
+      std::numeric_limits<double>::quiet_NaN(), true, 0.006),
+    0.006);
+  EXPECT_TRUE(std::isnan(trustedLiftClearance(
+      std::numeric_limits<double>::quiet_NaN(), false, 0.006)));
+
+  EXPECT_FALSE(verticalOnlyDiagnosticActive(
+      true, true, true, trustedLiftClearance(0.002, true, 0.006), 0.005, 0.003));
+  EXPECT_TRUE(verticalOnlyDiagnosticActive(
+      true, true, true, trustedLiftClearance(0.006, true, 0.002), 0.005, 0.003));
+}
+
 TEST(ExecutorFixedDiagnostic, RequiresHorizontalControlBeforePhysicalGuideExit)
 {
-  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.03, 0.02, 0.05, 0.005));
-  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.08, 0.06, 0.05, 0.005));
-  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.05, 0.04, 0.05, 0.005));
+  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.040, 0.035, 0.05, 0.005));
+  EXPECT_TRUE(verticalOnlyHandoffConfigurationSafe(0.005, 0.003, 0.05, 0.005));
+  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.050, 0.045, 0.05, 0.005));
+  EXPECT_FALSE(verticalOnlyHandoffConfigurationSafe(0.035, 0.035, 0.05, 0.005));
+}
+
+TEST(ExecutorFixedDiagnostic, BlendsCapturedHorizontalEstimateWithoutAStep)
+{
+  EXPECT_DOUBLE_EQ(fixedHandoffBlendScale(-0.1, 1.0), 1.0);
+  EXPECT_DOUBLE_EQ(fixedHandoffBlendScale(0.0, 1.0), 1.0);
+  EXPECT_NEAR(fixedHandoffBlendScale(0.5, 1.0), 0.5, kTolerance);
+  EXPECT_DOUBLE_EQ(fixedHandoffBlendScale(1.0, 1.0), 0.0);
+  EXPECT_DOUBLE_EQ(fixedHandoffBlendScale(2.0, 1.0), 0.0);
+  EXPECT_DOUBLE_EQ(
+    fixedHandoffBlendScale(std::numeric_limits<double>::quiet_NaN(), 1.0), 0.0);
 }
 
 TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)
@@ -320,6 +662,16 @@ TEST(ExecutorWatchdog, IncludesTrajectoryFreshnessOnlyInTrajectoryMode)
     ExecutorSafetyAction::LAND);
 }
 
+TEST(ExecutorWatchdog, StartedTrajectoryRemainsAValidEndpointHold)
+{
+  EXPECT_TRUE(std::isinf(
+    drone_navigation::trajectoryControlSourceAge(false, false, 0.1)));
+  EXPECT_DOUBLE_EQ(
+    drone_navigation::trajectoryControlSourceAge(true, false, 0.25), 0.25);
+  EXPECT_DOUBLE_EQ(
+    drone_navigation::trajectoryControlSourceAge(true, true, 42.0), 0.0);
+}
+
 TEST(TrajectoryUpdates, PreserveMinimumExecutionWindowWhileActive)
 {
   EXPECT_TRUE(drone_navigation::shouldAcceptTrajectoryUpdate(
@@ -330,6 +682,46 @@ TEST(TrajectoryUpdates, PreserveMinimumExecutionWindowWhileActive)
     true, true, true, 0.2, 1.0));
   EXPECT_TRUE(drone_navigation::shouldAcceptTrajectoryUpdate(
     true, true, true, 1.0, 1.0));
+}
+
+TEST(TrajectoryUpdates, PreservesCurrentTrajectoryUntilItsEndpoint)
+{
+  EXPECT_DOUBLE_EQ(
+    drone_navigation::trajectoryReplacementDelay(4.0, 21.435605657),
+    21.435605657);
+  EXPECT_DOUBLE_EQ(
+    drone_navigation::trajectoryReplacementDelay(4.0, 2.0), 4.0);
+  EXPECT_THROW(
+    drone_navigation::trajectoryReplacementDelay(-1.0, 2.0),
+    std::invalid_argument);
+}
+
+TEST(TrajectoryUpdates, ReturnSafetyPathCanPreemptAnAltitudeSag)
+{
+  EXPECT_TRUE(trajectoryMinimumAltitudeImproves(1.18, 1.72, 0.10));
+  EXPECT_FALSE(trajectoryMinimumAltitudeImproves(1.70, 1.72, 0.10));
+  EXPECT_FALSE(trajectoryMinimumAltitudeImproves(1.70, 1.60, 0.0));
+}
+
+TEST(TrajectoryUpdates, PlannerRecoveryCanReplaceAPathWithTheSameEndpoint)
+{
+  EXPECT_TRUE(plannerRecoveryAllowsTrajectoryReplacement(
+    "NO_PATH start_clear=true goal_clear=false",
+    "ACTIVE_POLYLINE_FALLBACK trajectory_id=42"));
+  EXPECT_TRUE(plannerRecoveryAllowsTrajectoryReplacement(
+    "NO_PATH", "ACTIVE trajectory_id=43"));
+  EXPECT_FALSE(plannerRecoveryAllowsTrajectoryReplacement(
+    "ACTIVE trajectory_id=41", "ACTIVE_POLYLINE_FALLBACK trajectory_id=42"));
+}
+
+TEST(TrajectoryUpdates, ForcedPhaseChangeWaitsForNewEndpoint)
+{
+  EXPECT_TRUE(forcedTrajectoryEndpointChanged(
+      false, {}, {4.55, -0.38, 1.8}, 0.05));
+  EXPECT_FALSE(forcedTrajectoryEndpointChanged(
+      true, {4.55, -0.38, 1.8}, {4.56, -0.37, 1.81}, 0.05));
+  EXPECT_TRUE(forcedTrajectoryEndpointChanged(
+      true, {4.55, -0.38, 1.8}, {5.5, -3.5, 1.8}, 0.05));
 }
 
 TEST(ExecutorLanding, DisarmsOnlyAfterConfirmedGroundDelay)
@@ -572,6 +964,15 @@ TEST(ExecutorLifecycle, OnlyExplicitArmRequestCanLeaveDisabled)
   inputs.offboard = true;
   decision = lifecycle.update(inputs);
   EXPECT_TRUE(decision.request_arm);
+}
+
+TEST(ExecutorLifecycle, AcceptedPreflightSurvivesOffboardReadyTransition)
+{
+  EXPECT_TRUE(drone_navigation::armCommandAllowed(true, true, false, 1.0));
+  EXPECT_FALSE(drone_navigation::armCommandAllowed(true, false, false, 1.0));
+  EXPECT_FALSE(drone_navigation::armCommandAllowed(true, true, true, 1.0));
+  EXPECT_FALSE(drone_navigation::armCommandAllowed(true, true, false, 0.99));
+  EXPECT_FALSE(drone_navigation::armCommandAllowed(false, true, false, 10.0));
 }
 
 TEST(ExecutorLifecycle, UnknownLandingStateCannotCompleteLanding)

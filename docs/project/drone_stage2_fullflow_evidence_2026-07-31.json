@@ -1,0 +1,120 @@
+{
+  "date": "2026-07-31",
+  "result": "latest_cold_start_full_flow_passed_with_postflight_status_hardening",
+  "acceptance_scope": {
+    "latest_single_run_complete": true,
+    "successful_full_flow_baselines_recorded": 2,
+    "ten_consecutive_runs_complete": false,
+    "drop_success_rate_90_percent_proven": false,
+    "current_postflight_patch_fully_reflown": false
+  },
+  "runtime": {
+    "rosbag": "bags/stage2_fullflow_20260731_1500",
+    "rosbag_storage": "mcap",
+    "rosbag_size_mib": 469.9,
+    "rosbag_duration_seconds": 2720.782932089,
+    "mission_time_to_complete_seconds": 2561.580095144,
+    "interface_report": "/tmp/stage2_interface_1500.json",
+    "interface_ok": true,
+    "unique_fmu_writer": true,
+    "px4_ulog": "/var/workspace/docker/isaac/docker/px4/ulog/2026-07-31/14_58_59.ulg"
+  },
+  "nominal_phase_sequence": [
+    "IDLE",
+    "PREFLIGHT",
+    "ARMING",
+    "TAKEOFF",
+    "EGO_TRANSIT",
+    "TARGET_SEARCH",
+    "VISUAL_ALIGN",
+    "DROP_HOLD",
+    "RETURN",
+    "LAND",
+    "COMPLETE"
+  ],
+  "actual_phase_edges": [
+    "IDLE",
+    "PREFLIGHT",
+    "ARMING",
+    "TAKEOFF",
+    "EGO_TRANSIT",
+    "TARGET_SEARCH",
+    "VISUAL_ALIGN",
+    "HOLD",
+    "VISUAL_ALIGN",
+    "DROP_HOLD",
+    "RETURN",
+    "HOLD",
+    "RETURN",
+    "HOLD",
+    "RETURN",
+    "LAND",
+    "COMPLETE"
+  ],
+  "flight_metrics": {
+    "maximum_truth_speed_mps": 0.6055087061907396,
+    "minimum_return_altitude_outside_fine_radius_m": 1.77157461643219,
+    "land_handoff_truth_pose_m": [
+      4.548540115356445,
+      -0.38525933027267456,
+      1.2965902090072632
+    ],
+    "land_handoff_horizontal_error_m": 0.005458188169123276,
+    "land_handoff_speed_mps": 0.04990526497460459,
+    "final_truth_pose_m": [
+      4.558742523193359,
+      -0.37081822752952576,
+      1.1299999952316284
+    ],
+    "final_truth_speed_mps": 0.0001017673581849652,
+    "px4_failsafe_true_messages": 0,
+    "px4_raw_landed": true,
+    "px4_raw_armed": false,
+    "recorded_landed_true_messages": 19
+  },
+  "drop_metrics": {
+    "target_center_m": [
+      5.5,
+      -3.5,
+      0.006
+    ],
+    "final_payload_position_m": [
+      5.4903244972229,
+      -3.5081772804260254,
+      0.06599995493888855
+    ],
+    "horizontal_error_m": 0.012668199128349706,
+    "within_0_2_m": true
+  },
+  "planner_executor_evidence": {
+    "planner_recovery_acceptances": 3,
+    "polyline_fallback_messages": 411,
+    "return_fine_mode_acceptances": 3,
+    "temporary_sensor_hold_events": 3,
+    "temporary_sensor_holds_recovered_automatically": true
+  },
+  "ulog_attitude_audit": {
+    "passed": true,
+    "maximum_tilt_limit_deg": 15.0,
+    "actual_max_abs_roll_deg": 5.970926124720125,
+    "actual_max_abs_pitch_deg": 6.1103057657279685,
+    "setpoint_max_abs_roll_deg": 4.99999969542966,
+    "setpoint_max_abs_pitch_deg": 4.2734151533708955
+  },
+  "postflight_hardening": {
+    "polyline_fallback_stops_at_corners_and_limits_acceleration": true,
+    "return_waypoint_latch_preserved_across_hold_recovery_unit_tested": true,
+    "px4_discrete_state_transient_local_subscription_verified_on_ground": true,
+    "public_landed_after_qos_fix": true,
+    "flight_core_tests_passed": 59
+  },
+  "notes": [
+    "The mission used one simulated latched ground COMPLETE signal; no manual flight setpoint was sent.",
+    "Three short navigation-input HOLD events recovered automatically. The last exposed a return-waypoint display latch reset; control remained in RETURN_FINE because the vehicle was already inside the fine radius. The latch was fixed and unit tested after landing.",
+    "PX4 raw land detection reported landed=true and VehicleStatus reported disarmed. The volatile adapter briefly retained landed=false after completion; its discrete subscriptions were changed to transient-local and a ground-only live check then published /drone/navigation/landed=true.",
+    "The latest full-flow bag predates only the postflight latch/QoS hardening; those two isolated changes have unit and ground-live validation but have not yet completed another full flight.",
+    "The simulator baseline uses /drone0/state/pose to gate guided takeoff handoff, prearm attitude agreement, and final low-speed return correction; competition permission for that raw-state dependency remains to be confirmed.",
+    "The measured 0.605509 m/s truth-speed peak is above the planner max_velocity parameter and remains an acceptance-tuning item.",
+    "This file records a successful baseline, not the required ten consecutive runs or 90 percent drop statistic."
+  ]
+}

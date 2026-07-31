@@ -46,17 +46,19 @@ public:
       "/drone/navigation/landed", rclcpp::QoS(10).transient_local());
 
     auto px4_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
+    auto px4_discrete_qos =
+      rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().transient_local();
     odometry_subscription_ = create_subscription<px4_msgs::msg::VehicleOdometry>(
       "/fmu/out/vehicle_odometry", px4_qos,
       std::bind(&Px4StateAdapter::onOdometry, this, std::placeholders::_1));
     status_subscription_ = create_subscription<px4_msgs::msg::VehicleStatus>(
-      "/fmu/out/vehicle_status_v1", px4_qos,
+      "/fmu/out/vehicle_status_v1", px4_discrete_qos,
       std::bind(&Px4StateAdapter::onStatus, this, std::placeholders::_1));
     ack_subscription_ = create_subscription<px4_msgs::msg::VehicleCommandAck>(
       "/fmu/out/vehicle_command_ack", px4_qos,
       std::bind(&Px4StateAdapter::onAck, this, std::placeholders::_1));
     land_subscription_ = create_subscription<px4_msgs::msg::VehicleLandDetected>(
-      "/fmu/out/vehicle_land_detected", px4_qos,
+      "/fmu/out/vehicle_land_detected", px4_discrete_qos,
       std::bind(&Px4StateAdapter::onLandDetected, this, std::placeholders::_1));
   }
 

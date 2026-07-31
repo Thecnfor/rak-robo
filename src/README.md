@@ -31,7 +31,7 @@ colcon ROS2 workspace。**workspace/ 下面直接就是 src/，不要其他东�
 |---|---|---|
 | **PX4 SITL** | ✅ 容器外部模拟器模式已运行；当前等待 Pegasus TCP 4560 | Docker 容器 `/var/workspace/docker/isaac/docker/px4/`，负责姿态 / 位置 / Offboard 闭环。完整用法见 `px4_sitl_usage.md` |
 | **PegasusSimulator** | 提供 Multirotor 载具与原始传感器仿真，与 PX4 backend 联调 | Isaac Sim 内集成，发布 `/drone0/*`、点云和 TF |
-| **EGO-Planner** | ⚠️ 滚动体素/A*/B-spline 安全占位核心已封装；指定 commit 不在官方 remote，raycast/LBFGS 待移植 | `drone_navigation_pkg` 输出内部 trajectory，由唯一 executor 转为 PX4 Offboard；最终 EGO 票据仍未通过。见 [`../docs/setup/ego_planner_integration.md`](../docs/setup/ego_planner_integration.md) |
+| **EGO-Planner** | ✅ 滚动体素/动态 A*/B-spline 与无碰 polyline fallback 已完成单轮实景全流程；⚠️ 上游 raycast/LBFGS 逐文件来源票据仍待关闭 | `drone_navigation_pkg` 输出内部 trajectory，由唯一 executor 转为 PX4 Offboard；2026-07-31 已完成避障出航、分段返航和精准落架，正式重复验收仍需 10 次连续通过。见 [`../docs/setup/ego_planner_integration.md`](../docs/setup/ego_planner_integration.md) |
 
 PX4 是唯一飞控，只有 `trajectory_executor` 可写 `/fmu/in/*`。四电机 topic 只在与 PX4 互斥的 direct-rotor 低速烟测模式使用。
 

@@ -6,7 +6,7 @@
 
 from collections import deque
 from dataclasses import dataclass
-from math import asin, atan2, copysign, degrees, isfinite, remainder, sqrt
+from math import asin, atan2, copysign, degrees, exp, isfinite, remainder, sqrt
 
 
 CONTINUOUS_FLIGHT_TOPICS = (
@@ -18,6 +18,10 @@ CONTINUOUS_FLIGHT_TOPICS = (
     "px4_odometry",
     "nav_odometry",
     "planner_state",
+)
+
+FIXED_DIAGNOSTIC_OPTIONAL_TOPICS = frozenset(
+    {"pointcloud", "planner_state"}
 )
 
 
@@ -35,10 +39,18 @@ def stale_flight_topics(
     ages: dict,
     telemetry_timeout: float,
     clock_timeout: float,
+    ignored_topics=(),
 ):
     """Return stale streams while allowing slow simulation clock delivery."""
+    ignored = frozenset(ignored_topics)
+    if not ignored.issubset(FIXED_DIAGNOSTIC_OPTIONAL_TOPICS):
+        raise ValueError(
+            "only fixed-diagnostic planner streams may be ignored"
+        )
     stale = []
     for name in CONTINUOUS_FLIGHT_TOPICS:
+        if name in ignored:
+            continue
         timeout = clock_timeout if name == "clock" else telemetry_timeout
         if ages.get(name, float("inf")) > timeout:
             stale.append(name)
@@ -257,6 +269,197 @@ def translate_target_between_origins(
     )
 
 
+def live_raw_error_corrected_nav_target(
+    raw_target: tuple,
+    raw_position: tuple,
+    nav_position: tuple,
+) -> tuple:
+    """Express a raw-truth return error as a live PX4 navigation target.
+
+    MAVLink GPS latitude/longitude quantization is coarser than the 8 mm
+    diagnostic launch-guide radius.  A one-time origin translation therefore
+    cannot guarantee a safe return to that narrow guide after a long flight.
+    This helper is intentionally limited to the acceptance probe's return
+    phase: it closes the final approach on simulator truth while the sole PX4
+    writer remains ``trajectory_executor``.
+    """
+    if not all(
+        len(value) == 3
+        for value in (raw_target, raw_position, nav_position)
+    ):
+        raise ValueError("live return correction requires three 3D vectors")
+    values = (*raw_target, *raw_position, *nav_position)
+    if not all(isfinite(value) for value in values):
+        raise ValueError("live return correction requires finite vectors")
+    return tuple(
+        nav_position[index] + raw_target[index] - raw_position[index]
+        for index in range(3)
+    )
+
+
+def landing_nav_target(
+    raw_target: tuple,
+    raw_position: tuple,
+    nav_position: tuple,
+    frozen_offset: tuple | None,
+    horizontal_gain: float = 1.0,
+) -> tuple:
+    """Use truth error during approach and an equivalent frozen final target.
+
+    Before capture, adding the simulator-truth position error to the current
+    PX4 estimate removes estimator-origin drift from the outer position loop.
+    At capture, ``nav_position - raw_position`` produces exactly the same
+    target, so switching to a stationary setpoint has no discontinuity.
+    """
+    if (
+        not isfinite(horizontal_gain)
+        or horizontal_gain <= 0.0
+        or horizontal_gain > 3.0
+    ):
+        raise ValueError("landing truth horizontal gain must be in (0, 3]")
+    if frozen_offset is None:
+        base_target = live_raw_error_corrected_nav_target(
+            raw_target,
+            raw_position,
+            nav_position,
+        )
+        return (
+            nav_position[0]
+            + horizontal_gain * (raw_target[0] - raw_position[0]),
+            nav_position[1]
+            + horizontal_gain * (raw_target[1] - raw_position[1]),
+            base_target[2],
+        )
+    if len(raw_target) != 3 or len(frozen_offset) != 3:
+        raise ValueError("landing target and frozen offset must be 3D vectors")
+    values = (*raw_target, *frozen_offset)
+    if not all(isfinite(value) for value in values):
+        raise ValueError("landing target and frozen offset must be finite")
+    return tuple(
+        raw_target[index] + frozen_offset[index] for index in range(3)
+    )
+
+
+def low_pass_frame_offset(
+    previous_offset: tuple,
+    observed_offset: tuple,
+    elapsed_seconds: float,
+    time_constant_seconds: float = 2.0,
+    maximum_rate_mps: float = 0.02,
+) -> tuple:
+    """Track slow estimator-origin drift without commanding sample-time jitter.
+
+    Isaac truth and PX4 odometry are delivered at different rates and their
+    message stamps use different clock domains.  Directly subtracting the
+    latest two samples can therefore create centimetre-scale target jumps.
+    This first-order filter follows the slowly varying frame offset in
+    simulation time, then limits the 3D correction rate as a second guard.
+    """
+    if len(previous_offset) != 3 or len(observed_offset) != 3:
+        raise ValueError("frame offsets must be three-dimensional")
+    values = (
+        *previous_offset,
+        *observed_offset,
+        elapsed_seconds,
+        time_constant_seconds,
+        maximum_rate_mps,
+    )
+    if (
+        not all(isfinite(value) for value in values)
+        or elapsed_seconds < 0.0
+        or time_constant_seconds <= 0.0
+        or maximum_rate_mps <= 0.0
+    ):
+        raise ValueError("frame-offset filter requires finite positive limits")
+    if elapsed_seconds == 0.0:
+        return tuple(previous_offset)
+
+    alpha = 1.0 - exp(-elapsed_seconds / time_constant_seconds)
+    update = tuple(
+        alpha * (observed_offset[index] - previous_offset[index])
+        for index in range(3)
+    )
+    update_norm = sqrt(sum(value * value for value in update))
+    maximum_step = maximum_rate_mps * elapsed_seconds
+    if update_norm > maximum_step:
+        scale = maximum_step / update_norm
+        update = tuple(value * scale for value in update)
+    return tuple(
+        previous_offset[index] + update[index] for index in range(3)
+    )
+
+
+def freeze_landing_frame_offset(
+    frozen_offset: tuple | None,
+    live_offset: tuple | None,
+    raw_home: tuple,
+    nav_home: tuple,
+) -> tuple:
+    """Take one estimator-frame snapshot and keep the landing goal stationary.
+
+    The live offset is useful while climbing because it tracks slow PX4
+    estimator-origin drift. Continuing to apply it during final approach moves
+    the setpoint by centimetres and prevents an 8 mm guide from seeing a
+    settled target. The first return sample is therefore frozen for both normal
+    and abort-return paths. A measured home-frame translation is the fallback
+    when no filtered sample is available.
+    """
+    candidate = frozen_offset
+    if candidate is None:
+        candidate = live_offset
+    if candidate is None:
+        if len(raw_home) != 3 or len(nav_home) != 3:
+            raise ValueError("landing frame origins must be three-dimensional")
+        candidate = tuple(
+            nav_home[index] - raw_home[index] for index in range(3)
+        )
+    if len(candidate) != 3 or not all(isfinite(value) for value in candidate):
+        raise ValueError("landing frame offset must be a finite 3D vector")
+    return tuple(candidate)
+
+
+def landing_frame_capture_action(
+    frozen: bool,
+    horizontal_error_m: float,
+    speed_mps: float,
+    capture_radius_m: float = 0.008,
+    release_radius_m: float = 0.012,
+    maximum_capture_speed_mps: float = 0.05,
+) -> str:
+    """Select live correction or a stationary final-approach frame.
+
+    The PX4-to-Isaac frame offset may drift by more than the launch guide
+    clearance during a long return. Follow the filtered live offset until
+    simulator truth is already inside the touchdown gate, then freeze it long
+    enough to prove a settled static setpoint. Hysteresis returns to live
+    correction if the aircraft moves materially outside the gate.
+    """
+    values = (
+        horizontal_error_m,
+        speed_mps,
+        capture_radius_m,
+        release_radius_m,
+        maximum_capture_speed_mps,
+    )
+    if (
+        not all(isfinite(value) for value in values)
+        or horizontal_error_m < 0.0
+        or speed_mps < 0.0
+        or capture_radius_m <= 0.0
+        or release_radius_m <= capture_radius_m
+        or maximum_capture_speed_mps <= 0.0
+    ):
+        raise ValueError("landing-frame capture requires finite hysteresis limits")
+    if frozen:
+        return "release" if horizontal_error_m > release_radius_m else "hold"
+    if (
+        horizontal_error_m <= capture_radius_m
+        and speed_mps <= maximum_capture_speed_mps
+    ):
+        return "capture"
+    return "live"
+
+
 class RateWindow:
     def __init__(self, horizon_seconds: float = 5.0):
         self._horizon = horizon_seconds
@@ -371,6 +574,21 @@ def cradle_touchdown_target(
     return (region.center_xy[0], region.center_xy[1], home_z)
 
 
+def cradle_approach_target(
+    region: LandingRegion,
+    home_z: float,
+    clearance_m: float,
+) -> tuple:
+    """Return a centered pose above the guide for a PX4 LAND handoff."""
+    if not region.valid() or not isfinite(home_z) or clearance_m <= 0.0:
+        raise ValueError("cradle approach requires valid region and clearance")
+    return (
+        region.center_xy[0],
+        region.center_xy[1],
+        home_z + clearance_m,
+    )
+
+
 def actuator_outputs_saturated(
     outputs,
     saturation_threshold: float = 0.95,
@@ -445,16 +663,48 @@ def fixed_step_reached(
     )
 
 
+def fixed_clearance_sequence_valid(
+    clearances_m,
+    hold_altitude_m: float,
+    home_altitude_m: float,
+    authorized_max_clearance_m: float = 0.30,
+    hard_max_clearance_m: float = 0.70,
+) -> bool:
+    """Validate an explicitly authorized, monotonically increasing climb ladder."""
+    values = tuple(float(value) for value in clearances_m)
+    if (
+        not values
+        or not isfinite(hold_altitude_m)
+        or not isfinite(home_altitude_m)
+        or not isfinite(authorized_max_clearance_m)
+        or not isfinite(hard_max_clearance_m)
+        or authorized_max_clearance_m <= 0.0
+        or hard_max_clearance_m <= 0.0
+        or authorized_max_clearance_m > hard_max_clearance_m
+    ):
+        return False
+    hold_clearance = hold_altitude_m - home_altitude_m
+    return (
+        0.0 < hold_clearance <= authorized_max_clearance_m
+        and all(
+            isfinite(clearance)
+            and 0.0 < clearance <= authorized_max_clearance_m
+            for clearance in values
+        )
+        and all(later > earlier for earlier, later in zip(values, values[1:]))
+    )
+
+
 def guided_touchdown_reached(
     horizontal_error_m: float,
     altitude_error_m: float,
     speed_mps: float,
-    guide_radius_m: float = 0.004,
+    guide_radius_m: float = 0.008,
     altitude_tolerance_m: float = 0.05,
     max_speed_mps: float = 0.05,
 ) -> bool:
-    """Require the body to be centered inside the launch guide before LAND."""
-    if not 0.0 < guide_radius_m <= 0.004:
+    """Require 2 mm clearance inside the current 10 mm launch guide."""
+    if not 0.0 < guide_radius_m <= 0.008:
         return False
     return fixed_step_reached(
         horizontal_error_m,

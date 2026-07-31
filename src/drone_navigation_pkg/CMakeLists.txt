@@ -69,6 +69,9 @@ install(PROGRAMS scripts/px4_hover_probe.py
 install(PROGRAMS scripts/ulog_attitude_audit.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME ulog_attitude_audit)
+install(PROGRAMS scripts/ulog_return_audit.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME ulog_return_audit)
 install(FILES scripts/hover_probe_core.py
   DESTINATION lib/${PROJECT_NAME})
 install(FILES requirements-flight-tools.txt
@@ -87,6 +90,9 @@ if(BUILD_TESTING)
   add_test(
     NAME test_ulog_attitude_audit
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ulog_attitude_audit.py)
+  add_test(
+    NAME test_ulog_return_audit
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_ulog_return_audit.py)
 endif()
 
 ament_export_include_directories(include)

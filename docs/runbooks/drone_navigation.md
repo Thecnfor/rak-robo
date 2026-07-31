@@ -2,11 +2,43 @@
 
 ## 当前交付状态
 
-代码、消息、launch、Docker 外部模拟器模式、接口票据和可见无人机受控起降已经落地。
-2026-07-22 的多次受控实飞完成 Offboard 预流、解锁、物理离架、HOLD、AUTO_LAND、落地和
-自动解除武装；最新 `round1i` 使用全部安全修复后的构建并返回 `success=true`。正式验收仍需 1.8 m/30 s 悬停、速度收敛
-调参、EGO 障碍/返航、投放区 `drop_search_pose` 和下视相机 PID。保持
-`mission_autostart=false`，只通过安全探针分阶段放飞。
+代码、消息、launch、Docker 外部模拟器模式、接口票据和无人机比赛流程已经落地。
+2026-07-31 的最新冷启动实景票据连续完成关侧舱、Offboard 解锁起飞、EGO 避障、
+下视视觉对准、开底舱投放、经通道点返航、毫米级落架、PX4 Land、判地和自动解锁，
+最终状态为 `COMPLETE`。rosbag
+`bags/stage2_fullflow_20260731_1500` 记录了 2561.6 s 到 `COMPLETE` 的状态链；静止
+投放误差 1.27 cm，远离 home 的返航最低高度 1.772 m，Land 交接水平误差约
+5.46 mm、速度 0.0499 m/s，最终速度约 0.00010 m/s，全程没有 PX4 failsafe。
+接口报告 `/tmp/stage2_interface_1500.json` 为 `ok=true` 且 `/fmu/in/*`
+保持唯一写入者。
+可提交的指标摘要见
+`docs/project/drone_stage2_fullflow_evidence_2026-07-31.json`。
+
+该轮三次导航输入短暂超时都自动 HOLD/恢复；最后一次暴露了 RETURN 的 waypoint
+显示 latch 在 HOLD 恢复时被清零，以及 BEST_EFFORT volatile 离散状态可能错过最后
+`landed=true`。飞机实际始终保持 `RETURN_FINE`，PX4 原始状态最终为
+`landed=true/armed=false`。落地后已修成 HOLD→RETURN 不重置 latch，并把
+VehicleStatus/LandDetected 订阅改为 transient-local；59 项核心测试和地面实时
+`/drone/navigation/landed=true` 验证通过。两项收尾改动尚未再跑一轮完整飞行，
+因此仍需计入下一次连续回归。
+
+这是一条“PX4 主飞控 + Isaac 物理真值安全见证”的仿真基线：航路规划和常规轨迹跟踪
+使用 PX4 估计里程计，但起飞导轨 XY 接管时机、预解锁姿态一致性和返架最后
+`0.45 m` 的低速修正读取 `/drone0/state/pose`。它不是纯 PX4 估计闭环。提交前必须
+确认比赛允许使用该场景原始状态接口；若不允许，应以允许的视觉/测距定位替代近场修正，
+不得把真值依赖隐藏为“仅诊断”。本轮记录的真值速度峰值为 `0.606 m/s`，高于
+`max_velocity=0.3 m/s` 的规划值；该值包含 PX4 物理跟踪瞬态，须在连续回归中确认
+不越过最终比赛安全包线。
+
+2026-07-26 的完整高度票据完成 Offboard 预流、解锁、七级爬升至世界高度
+1.80 m、5 s HOLD、RETURN_HOME、AUTO_LAND、落架和自动解除武装。返航用 Isaac
+真值外环进入 8 mm 捕获圈，最终触地点距托架中心约 10.2 mm，位于单侧 10 mm
+导轨间隙和 ±20 mm 承重区内。ULog 实际最大横滚/俯仰为 0.289°/0.694°，四电机
+峰值为 0.584--0.602，无饱和、failsafe 或 failure-detector 标志。随后正式
+1.80 m/30 s HOLD 也通过：最大速度 0.0267 m/s、高度误差 15.4 mm，ULog 最大实际
+横滚/俯仰 0.240°/0.888°、电机峰值 0.504--0.518。当前单轮完整比赛流程已通过，
+正式验收仍需完成 10 次连续无碰撞回归和至少 10 次投放统计，确认 90% 落点误差
+不超过 0.2 m。保持 `mission_autostart=false`，由地面完成信号触发任务。
 
 ## 1. 环境
 
@@ -56,9 +88,10 @@ PX4 外部仿真必须按以下顺序初始化，不能让 EKF 在侧舱门关�
 
 2026-07-23 的对照试验证明，场景默认 `left_open()` 后立即启动 PX4 会把关门瞬态带入
 EKF；按上述顺序启动后，Isaac/PX4 横滚和俯仰差缩小到约 `0.03°`。
-`0.004 m` 位置门限比导轨单侧 `0.005 m` 间隙保留 `1 mm` 余量；触地点落在导轨
-角部时即使旧的 `0.02 m` 门限会通过，也必须重载场景重新居中，不能直接进行下一轮
-增推。
+预解锁 `0.004 m` 位置门限用于固定出生点和 PX4 估计原点。当前导轨单侧物理间隙为
+`0.010 m`；返航进入门限为 `0.008 m`，保留 `2 mm` 机械余量。触地点落在导轨
+角部时即使旧的 `0.02 m` 落区门限会通过，也必须重载场景重新居中，不能直接进行
+下一轮增推。
 
 不要同时运行 systemd 的 GUI Isaac 和上述独立 launcher。若 GUI 服务正在使用，应在
 Kit Script Editor 执行：
@@ -145,7 +178,12 @@ DRONE_BACKEND=direct_rotor ros2 run bridge_competition_pkg \
 - `prearm_spawn_position`：Isaac 原始世界位姿的合法起飞支架中心，当前同为
   `[4.55,-0.38,1.13]`。预解锁还必须同时满足位置误差 ≤0.004 m、速度 ≤0.05 m/s、
   横滚/俯仰绝对值 ≤3°；支架状态字符串不能替代这项实体位姿检查。
-- `drop_search_pose`：从最终 USD/比赛实景提取，当前 `[0,0,1.8]` 是占位。
+- `drop_search_pose`：当前 X1 圆心标定为 `[5.5,-3.5,1.8]`。
+- `return_transit_waypoint`：返航穿越长隔断的安全通道点，当前
+  `[5.5,-1.7,1.8]`；抵达后单向锁存，不因漂移回退。
+- `return_approach_pose`：EGO 在起飞托架膨胀区外的终点，当前
+  `[4.55,-0.75,1.8]`。进入 `return_fine_radius=0.45 m` 后由限速近场环先横向对中，
+  进入 `return_descent_radius=0.02 m` 后才下降。
 - `takeoff_height` 和 `virtual_ceiling`：按净空校准。
 - 相机必须确认 `/drone0/down_camera/color/image_raw` 是正下视；移动目标到图像四个方向，
   验证视觉速度符号后再调 `visual_kp`。
@@ -238,7 +276,9 @@ ros2 run drone_navigation_pkg px4_hover_probe --ros-args \
   -p fixed_target_horizontal_tolerance:=0.02 \
   -p fixed_target_altitude_tolerance:=0.015 \
   -p cradle_touchdown:=true \
-  -p cradle_touchdown_horizontal_tolerance:=0.004
+  -p cradle_touchdown_horizontal_tolerance:=0.008 \
+  -p cradle_approach_clearance:=0.055 \
+  -p landing_truth_xy_gain:=2.0
 ```
 
 探针把 `/clock` 的 wall-time 失联阈值独立设为 5 s，其余原始位姿、PX4 传感器和
@@ -256,14 +296,18 @@ v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和
 意图直到 PX4 确认 disarm，禁止在 `ACTIVE` 状态直接退出。横向限位托架模式必须同时
 启用 `fixed_vertical_only_diagnostic`：首飞只锁高度，XY 使用零加速度，航向角留空并
 命令零偏航速率，避免机体尚受限时由估计漂移积累位置/航向控制量。当前物理导轨直接
-包围 `/World/quadrotor/body/body_collision`，单侧间隙为 `5 mm`，顶部为
-`+0.05 m`。executor 必须在 `+0.03 m` 接管完整 XY/航向控制，并在下降到
-`+0.02 m` 前恢复垂直模式；这给 PX4 留出 `20 mm` 的受约束接管高度。不满足配置约束
-时节点拒绝启动。进入垂直模式前水平偏移还必须小于 `4 mm`，给导轨保留 `1 mm`
-机械余量；prearm 出生点容差同样为 `4 mm`。接管时捕获 PX4 当前估计航向，
+包围 `/World/quadrotor/body/body_collision`，单侧间隙为 `10 mm`，顶部为
+`+0.05 m`。当前实飞配置在上升超过 `+0.005 m` 后接管完整 XY/航向控制，并在
+下降到 `+0.003 m` 内恢复垂直模式；该数值以
+`navigation.yaml` 的 `fixed_vertical_release_clearance`/
+`fixed_vertical_reengage_clearance` 为准，不再沿用旧文档的 `+0.03/+0.02 m`。
+不满足配置约束时节点拒绝启动。请求 Land 前 Isaac 真值水平偏移还必须小于
+`8 mm`，给当前导轨
+保留 `2 mm` 机械余量；prearm 出生点容差仍为独立的 `4 mm`。接管时捕获 PX4 当前估计航向，
 避免航向设定点阶跃。探针默认在偏航率超过
 0.5 rad/s 时直接请求 PX4 Land；`cradle_touchdown` 会在 LAND 前先用同一模式垂直
-回到支撑面。
+回到支撑面上方。实飞将 Land 交接高度从 0.08 m 收紧为 0.055 m；继续降低会让完整
+XY 控制深入 0.05 m 高的物理导轨，未经新的接触票据不得采用。
 
 2026-07-22 的 +0.10 m 票据已通过：最高离架 0.1171 m、HOLD 最大速度 0.0381 m/s、
 触地点距验证中心 0.01243 m，四电机 ULog 峰值为 0.5345--0.5364，0 个采样达到
@@ -286,25 +330,43 @@ v1.16 默认 DDS 不开放该输出，故每次飞行必须从 ULog 复核饱和
 最终滑出台面，已经判定不安全并从 Docker Compose 回退。禁止复用 `K=0.5`；再次通电
 前必须重载场景扶正无人机，先核对 PhysX 质量/惯量与 PX4 模型，再保持 rate K=1.0
 逐项验证外环姿态参数。该失败也证明旧的导轨内 `0.05 m` 横移门限晚于物理边界；现已
-收紧为 `0.012 m`。当前不得继续增高。
+收紧为 `0.012 m`。这是历史失败结论；2026-07-26 的新 +0.10 m 票据通过后已重新
+授权下一项 +0.20 m/10 s 测试。
 
 随后三次 `MC_PITCH_P=4.0`、rate K 保持 `1.0` 的 `+0.10 m` 诊断均由安全门限主动
 LAND 并完成 disarm，没有坠机。ULog 实际最大俯仰分别约 `1.66°`、`0.82°`，最后一轮
 最大横滚约 `1.16°`，电机峰值低于 `0.557`；因此这些轮次没有复现 +0.20 m 的姿态
 发散。旧导轨却引用了无碰撞 API 的 `transparent_cargo_bay` 外观包围盒，真实
 `body_collision` 单侧间隙仍为 15--17.5 mm，12 mm 门限会在产生导轨接触前触发。
-场景现已改为用实际主刚体碰撞盒生成 5 mm 间隙导轨，并要求 PX4 启动前关闭左侧舱门。
+场景先改为用实际主刚体碰撞盒生成导轨，随后把单侧间隙校准为 10 mm，并要求 PX4
+启动前关闭左侧舱门。
 由于货舱在 Y 方向比主机身更宽，四面导轨还必须显式过滤货舱本体、两扇舱门、锁定
 载荷和旋翼，只保留与主机身碰撞；否则初始重叠会令 PhysX articulation 变成 NaN。
 该过滤修复已通过 9 项离线几何测试；零电机实景连续 10 秒收到 136 个采样，保留的
 每秒样本最大位置漂移为 `1.23e-7 m`、横滚/俯仰为 0°、最大速度为
 `0.000139 m/s`，且服务跨过旧故障时间点后仍保持
-active。它尚未取得带电接触票据，因此禁止直接重试 `+0.20 m`。
+active。该修复此后已由 2026-07-26 的 +0.10 m 带电起降票据关闭；+0.20 m 必须继续
+沿用同一 5°/0.15 m/s/电机 0.95 安全包线。
 
 `fixed_guided_horizontal_limit_m=0.012` 是“导轨接触失效时立即 LAND”的独立软件
 故障门限，不是导轨自由间隙；不得再要求它小于 4 mm 的 prearm/返架居中门限。
 
-下一次带电前按以下顺序执行：
+2026-07-26 后续阶梯已经取代上述“下一次”限制：单轮
+`+0.10/+0.20/+0.30 m`、2 s HOLD 和返架通过；随后单轮
+`+0.10/+0.20/+0.30/+0.40/+0.50/+0.60/+0.67 m` 到世界高度 1.80 m、5 s HOLD、
+返架、Land、disarm 全部通过。完整高度票据为
+`/tmp/drone_stage2_fullheight_180m_return_20260726.json`，ULog 为
+`docker/px4/ulog/2026-07-26/12_57_18.ulg`。所有 5 个 PX4 命令 ACK 成功；HOLD
+最大高度误差 8.9 mm、最大速度 0.0319 m/s，返航最小 Isaac 真值水平误差
+0.71 mm。ULog 静态返航代理因无法观测 Isaac 真值外环而不作为毫米级落架的最终
+判据；其职责仅是复核 PX4 估计侧轨迹。实景 raw pose、落区包含关系和 ULog
+姿态/电机/failsafe 三类证据必须同时保存。
+
+随后 `1.80 m/30 s HOLD` 也已通过，组合证据见
+`docs/project/drone_fullheight_hold30_evidence_2026-07-26.json`。因此当前开放前沿
+已由 2026-07-31 的完整流程票据推进为连续回归；单轮通过不得写成“10 次验收完成”。
+
+以下是 2026-07-23 的历史恢复步骤，保留用于故障回归，不再代表当前开放高度：
 
 1. 在无 PX4 状态下验证六个支撑目标存在、主刚体到四面导轨的间隙为 `5±1 mm`，并用
    PhysX 接触报告或低速水平推压证明 `body_collision` 会碰到导轨。
@@ -330,6 +392,18 @@ active。它尚未取得带电接触票据，因此禁止直接重试 `+0.20 m`�
 - 投放至少 90% 静止落点距圆心 ≤0.2 m。
 - 保存 `/tmp/drone_interface_report.json`、rosbag、ULog、状态机日志、规划轨迹和全程视频。
 - 接口/标定不通过时，不能以“节点已启动”替代比赛验收。
+- 通过新出现障碍的动态换轨回归：折线后备轨迹已在每个拐角停车并满足速度/加速度
+  限制；普通 ACTIVE 路径仍锁到端点以避免零速段重复重启，后续需增加显式
+  `ACTIVE_OBSTACLE_REPLAN` 抢占后再做实景障碍测试。
+- 确认 `/drone0/state/pose` 的比赛合规性，或完成允许传感器的近场定位替换。
+- 记录每轮真值速度峰值；正式安全上限确认前，`0.606 m/s` 单轮峰值不得当作已调参完成。
+- 2026-07-31 单轮完整流程基线：
+  `bags/stage2_fullflow_20260731_1500`、
+  `/tmp/stage2_interface_1500.json` 和
+  `docs/project/drone_stage2_fullflow_evidence_2026-07-31.json`。状态序列实际达到
+  `IDLE → PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH →
+  VISUAL_ALIGN → DROP_HOLD → RETURN → LAND → COMPLETE`；两次短暂传感器 HOLD
+  均自动恢复，不属于人工干预。
 - 当前受控起降基线见
   `docs/project/drone_hover_evidence_2026-07-22.json`；它证明“真实能飞”，不替代正式
   1.8 m/30 s 和 10 次连续完整流程验收。
