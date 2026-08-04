@@ -24,6 +24,7 @@
 #include "px4_msgs/msg/vehicle_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int32.hpp"
 
 namespace drone_navigation
 {
@@ -120,6 +121,8 @@ public:
       "/fmu/in/vehicle_command", reliable_qos);
     state_publisher_ = create_publisher<std_msgs::msg::String>(
       "/drone/navigation/executor_state", rclcpp::QoS(10).transient_local());
+    accepted_trajectory_publisher_ = create_publisher<std_msgs::msg::UInt32>(
+      "/drone/navigation/accepted_trajectory_id", rclcpp::QoS(1).transient_local());
 
     trajectory_subscription_ = create_subscription<navigation_message::Trajectory>(
       "/drone/navigation/trajectory", rclcpp::QoS(1).transient_local(),
@@ -188,6 +191,10 @@ private:
       publishState("REJECTED empty_trajectory");
       return;
     }
+    if (message->preemption_reason > navigation_message::Trajectory::PREEMPTION_OBSTACLE) {
+      publishState("REJECTED invalid_preemption_reason");
+      return;
+    }
     last_trajectory_ = steadyNow();
     if (force_next_trajectory_ && !force_recovery_trajectory_ &&
       have_trajectory_ && !trajectory_.points.empty())
@@ -225,8 +232,10 @@ private:
       trajectoryMinimumAltitudeImproves(
       minimum_altitude(trajectory_), minimum_altitude(*message),
       return_altitude_preemption_margin_);
+    const bool obstacle_preemption =
+      message->preemption_reason == navigation_message::Trajectory::PREEMPTION_OBSTACLE;
     if (!force_next_trajectory_ && !force_recovery_trajectory_ &&
-      !return_safety_preemption &&
+      !return_safety_preemption && !obstacle_preemption &&
       !shouldAcceptTrajectoryUpdate(
         trajectory_started_, armed_, offboard_, accepted_trajectory_age,
         replacement_delay))
@@ -242,10 +251,14 @@ private:
     force_next_trajectory_ = false;
     const bool planner_recovery_preemption = force_recovery_trajectory_;
     force_recovery_trajectory_ = false;
+    std_msgs::msg::UInt32 accepted;
+    accepted.data = message->trajectory_id;
+    accepted_trajectory_publisher_->publish(accepted);
     publishState(
       "TRAJECTORY_ACCEPTED id=" + std::to_string(message->trajectory_id) +
+      (obstacle_preemption ? " reason=obstacle" :
       (return_safety_preemption ? " reason=return_altitude_safety" :
-      (planner_recovery_preemption ? " reason=planner_recovery" : "")));
+      (planner_recovery_preemption ? " reason=planner_recovery" : ""))));
   }
 
   void onPlannerState(const std_msgs::msg::String::SharedPtr message)
@@ -939,6 +952,7 @@ private:
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr setpoint_publisher_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr command_publisher_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_publisher_;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr accepted_trajectory_publisher_;
   rclcpp::Subscription<navigation_message::Trajectory>::SharedPtr trajectory_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planner_state_subscription_;

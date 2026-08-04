@@ -95,16 +95,20 @@
     prearm_attitude_tolerance_deg: 0.5
     mission_autostart: false
     # Runtime scoring target in integrated_runtime/config.py:
-    # center=(5.5,-3.5), radius=0.25 m. The coarse pose stays high enough for
-    # obstacle clearance and lets the down camera see the entire plain circle.
-    drop_search_pose: [5.5, -3.5, 1.8]
+    # center=(5.5,-3.5), radius=0.25 m. LiDAR has a persistent occupied return
+    # at the exact target center. Stop EGO 0.20 m short at the proven
+    # collision-free observation pose; down-look visual control owns the final
+    # translation to the circle center.
+    drop_search_pose: [5.5, -3.3, 1.8]
     drop_min_height: 1.6
     drop_max_height: 2.0
     visual_offset_threshold: 0.04
     visual_alignment_seconds: 0.8
-    # Hold the last valid circle briefly across isolated RTX render misses.
-    # Invalid frames never refresh this timer.
-    visual_target_loss_grace_seconds: 0.6
+    # Keep VISUAL_ALIGN latched across several isolated RTX render misses,
+    # while the shorter control timeout below zeroes velocity on stale pixels.
+    # Invalid frames never refresh either timer.
+    visual_target_loss_grace_seconds: 2.0
+    visual_target_control_timeout_seconds: 0.4
     visual_kp: 0.25
     visual_max_velocity: 0.20
     payload_release_settle_seconds: 2.0

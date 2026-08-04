@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -20,6 +22,7 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int32.hpp"
 #include "tf2/exceptions.hpp"
 #include "tf2_sensor_msgs/tf2_sensor_msgs.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -87,6 +90,10 @@ public:
     pointcloud_subscription_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/avoidance/lidar/pointcloud", rclcpp::SensorDataQoS(),
       std::bind(&EgoLocalPlannerNode::onPointcloud, this, std::placeholders::_1));
+    accepted_trajectory_subscription_ = create_subscription<std_msgs::msg::UInt32>(
+      "/drone/navigation/accepted_trajectory_id", rclcpp::QoS(1).transient_local(),
+      std::bind(
+        &EgoLocalPlannerNode::onAcceptedTrajectory, this, std::placeholders::_1));
     replan_timer_ = create_wall_timer(
       std::chrono::milliseconds(200), std::bind(&EgoLocalPlannerNode::replan, this));
   }
@@ -206,6 +213,26 @@ private:
     cloud_revision_++;
   }
 
+  void onAcceptedTrajectory(const std_msgs::msg::UInt32::SharedPtr message)
+  {
+    const auto found = published_paths_.find(message->data);
+    if (found == published_paths_.end()) {
+      publishState("ACCEPTED_TRAJECTORY_PATH_UNAVAILABLE id=" + std::to_string(message->data));
+      return;
+    }
+    accepted_path_ = found->second;
+    have_accepted_path_ = true;
+    // Feedback can arrive after newer candidates have already been published.
+    // Retire only candidates no newer than the accepted id; clearing the whole
+    // cache would make a subsequent executor acknowledgement unresolvable.
+    while (!published_path_order_.empty() &&
+      published_path_order_.front() <= message->data)
+    {
+      published_paths_.erase(published_path_order_.front());
+      published_path_order_.pop_front();
+    }
+  }
+
   void replan()
   {
     if (!have_odometry_ || !have_pointcloud_ || !have_goal_) {
@@ -267,6 +294,7 @@ private:
     navigation_message::Trajectory trajectory;
     trajectory.header = debug_path.header;
     trajectory.trajectory_id = ++trajectory_id_;
+    trajectory.preemption_reason = navigation_message::Trajectory::PREEMPTION_NONE;
     constexpr double kSamplePeriod = 0.05;
     if (collision_free) {
       for (double time = 0.0; time < spline.duration(); time += kSamplePeriod) {
@@ -281,9 +309,31 @@ private:
           trajectory, sample.state, sample.time_from_start_seconds);
       }
     }
+    std::vector<Vec3> published_path;
+    published_path.reserve(trajectory.points.size());
+    for (const auto & point : trajectory.points) {
+      published_path.push_back({point.position.x, point.position.y, point.position.z});
+    }
+    const bool accepted_path_has_collision = have_accepted_path_ &&
+      !planner_->remainingPathCollisionFree(current_position_, accepted_path_);
+    const bool incoming_path_collision_free =
+      planner_->remainingPathCollisionFree(current_position_, published_path);
+    const bool obstacle_preemption = obstacleRiskAllowsTrajectoryReplacement(
+      accepted_path_has_collision, incoming_path_collision_free);
+    if (obstacle_preemption) {
+      trajectory.preemption_reason = navigation_message::Trajectory::PREEMPTION_OBSTACLE;
+    }
+    published_paths_.emplace(trajectory.trajectory_id, published_path);
+    published_path_order_.push_back(trajectory.trajectory_id);
+    constexpr std::size_t kMaximumPublishedPathCache = 64U;
+    while (published_path_order_.size() > kMaximumPublishedPathCache) {
+      published_paths_.erase(published_path_order_.front());
+      published_path_order_.pop_front();
+    }
     trajectory_publisher_->publish(trajectory);
     publishState(
-      std::string(collision_free ? "ACTIVE" : "ACTIVE_POLYLINE_FALLBACK") +
+      std::string(obstacle_preemption ? "ACTIVE_OBSTACLE_REPLAN" :
+      (collision_free ? "ACTIVE" : "ACTIVE_POLYLINE_FALLBACK")) +
       " trajectory_id=" + std::to_string(trajectory_id_));
   }
 
@@ -339,12 +389,16 @@ private:
   bool have_pointcloud_{false};
   bool have_transform_update_{false};
   bool have_goal_{false};
+  bool have_accepted_path_{false};
   std::uint64_t cloud_revision_{0};
   std::uint64_t goal_revision_{0};
   std::uint64_t planned_cloud_revision_{0};
   std::uint64_t planned_goal_revision_{0};
   std::size_t last_obstacle_count_{0};
   std::uint32_t trajectory_id_{0};
+  std::vector<Vec3> accepted_path_;
+  std::unordered_map<std::uint32_t, std::vector<Vec3>> published_paths_;
+  std::deque<std::uint32_t> published_path_order_;
   rclcpp::Time last_odometry_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_pointcloud_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_transform_success_time_{0, 0, RCL_ROS_TIME};
@@ -354,6 +408,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscription_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_subscription_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_subscription_;
+  rclcpp::Subscription<std_msgs::msg::UInt32>::SharedPtr accepted_trajectory_subscription_;
   rclcpp::TimerBase::SharedPtr replan_timer_;
 };
 

@@ -61,6 +61,8 @@ public:
     visual_alignment_seconds_ = declare_parameter<double>("visual_alignment_seconds", 0.8);
     visual_target_loss_grace_seconds_ = declare_parameter<double>(
       "visual_target_loss_grace_seconds", 0.6);
+    visual_target_control_timeout_seconds_ = declare_parameter<double>(
+      "visual_target_control_timeout_seconds", 0.4);
     visual_kp_ = declare_parameter<double>("visual_kp", 0.25);
     visual_max_velocity_ = declare_parameter<double>("visual_max_velocity", 0.20);
     drop_min_height_ = declare_parameter<double>("drop_min_height", 1.6);
@@ -103,9 +105,12 @@ public:
       throw std::runtime_error("prearm pose limits must be non-negative");
     }
     if (visual_target_loss_grace_seconds_ < 0.0 ||
+      visual_target_control_timeout_seconds_ < 0.0 ||
+      visual_target_control_timeout_seconds_ > visual_target_loss_grace_seconds_ ||
       drop_min_height_ < 0.0 || drop_min_height_ > drop_max_height_)
     {
-      throw std::runtime_error("drop height window must be non-negative and ordered");
+      throw std::runtime_error(
+              "visual freshness windows and drop height window must be non-negative and ordered");
     }
     if (payload_release_settle_seconds_ < 0.0 ||
       return_transit_clearance_ <= return_approach_clearance_ ||
@@ -423,10 +428,13 @@ private:
   void tick()
   {
     const auto previous_phase = supervisor_.phase();
+    const double target_age = ageOrInfinity(last_target_time_);
     const bool recent_target = visualTargetRecent(
-      target_visible_, ageOrInfinity(last_target_time_),
-      visual_target_loss_grace_seconds_);
-    const bool instant_alignment = recent_target &&
+      target_visible_, target_age, visual_target_loss_grace_seconds_);
+    const bool control_target_recent = visualTargetRecent(
+      target_visible_, target_age,
+      visual_target_control_timeout_seconds_);
+    const bool instant_alignment = control_target_recent &&
       std::hypot(target_nx_, target_ny_) <= visual_offset_threshold_ &&
       std::hypot(current_velocity_.x, current_velocity_.y) < 0.05 &&
       current_position_.z >= drop_min_height_ && current_position_.z <= drop_max_height_;
@@ -564,7 +572,9 @@ private:
       onPhaseEntered(previous_phase, phase);
     }
     if (!operator_override && phase == FlightPhase::VISUAL_ALIGN) {
-      publishVisualVelocity(recent_target);
+      // Keep the phase latched across brief render misses, but command zero
+      // velocity once the shorter control timeout expires.
+      publishVisualVelocity(control_target_recent);
     }
     if (!operator_override && phase == FlightPhase::RETURN) {
       if (return_fine_active) {
@@ -656,6 +666,7 @@ private:
   {
     switch (phase) {
       case FlightPhase::PREFLIGHT:
+        return_descent_latched_ = false;
         publishString(cargo_command_publisher_, "left_close");
         break;
       case FlightPhase::ARMING:
@@ -687,6 +698,7 @@ private:
       case FlightPhase::RETURN:
         if (shouldResetReturnTransitWaypoint(previous_phase, phase)) {
           return_transit_waypoint_reached_ = false;
+          return_descent_latched_ = false;
         }
         publishReturnGoal(true);
         publishString(control_mode_publisher_, "RETURN");
@@ -783,9 +795,13 @@ private:
 
   void publishReturnFineVelocity()
   {
+    return_descent_latched_ = updateReturnDescentLatch(
+      return_descent_latched_, raw_home_, prearm_sample_.position,
+      return_descent_radius_);
     const Vec3 staged_target = stagedReturnRawTarget(
       raw_home_, prearm_sample_.position, return_transit_clearance_,
-      return_approach_clearance_, return_descent_radius_);
+      return_approach_clearance_, return_descent_radius_,
+      return_descent_latched_);
     const Vec3 correction = positionAlignmentVelocityEnu(
       prearm_sample_.position, staged_target, return_fine_kp_,
       return_fine_max_velocity_, return_fine_max_vertical_velocity_);
@@ -865,6 +881,7 @@ private:
   double visual_offset_threshold_{0.04};
   double visual_alignment_seconds_{0.8};
   double visual_target_loss_grace_seconds_{0.6};
+  double visual_target_control_timeout_seconds_{0.4};
   double visual_kp_{0.25};
   double visual_max_velocity_{0.2};
   double drop_min_height_{1.6};
@@ -913,6 +930,7 @@ private:
   bool target_visible_{false};
   bool payload_released_{false};
   bool return_transit_waypoint_reached_{false};
+  bool return_descent_latched_{false};
   bool have_operator_goal_{false};
   bool operator_land_latched_{false};
   double target_nx_{0.0};

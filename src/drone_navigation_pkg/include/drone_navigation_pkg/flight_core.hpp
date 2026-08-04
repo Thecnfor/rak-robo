@@ -125,6 +125,13 @@ Vec3 stagedReturnRawTarget(
   const Vec3 & raw_position,
   double transit_clearance,
   double approach_clearance,
+  double descent_radius,
+  bool descent_latched = false);
+
+bool updateReturnDescentLatch(
+  bool currently_latched,
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
   double descent_radius);
 
 bool returnTransitWaypointReached(
@@ -172,6 +179,10 @@ bool trajectoryMinimumAltitudeImproves(
   double current_minimum_altitude,
   double incoming_minimum_altitude,
   double required_improvement);
+
+bool obstacleRiskAllowsTrajectoryReplacement(
+  bool accepted_remaining_path_has_collision,
+  bool incoming_path_collision_free);
 
 bool plannerRecoveryAllowsTrajectoryReplacement(
   const std::string & previous_state,
@@ -336,6 +347,9 @@ public:
   void setObstacles(const std::vector<Vec3> & points);
   std::vector<Vec3> plan(const Vec3 & start, const Vec3 & goal) const;
   bool collisionFree(const Vec3 & start, const Vec3 & goal) const;
+  bool remainingPathCollisionFree(
+    const Vec3 & current_position,
+    const std::vector<Vec3> & accepted_path) const;
 
 private:
   struct Impl;

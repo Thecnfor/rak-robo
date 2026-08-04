@@ -42,6 +42,7 @@ using drone_navigation::positionAlignmentVelocityEnu;
 using drone_navigation::sampleCollisionFreePolyline;
 using drone_navigation::trustedLiftClearance;
 using drone_navigation::nextMonotonicTimestampMicros;
+using drone_navigation::updateReturnDescentLatch;
 using drone_navigation::verticalOnlyDiagnosticActive;
 using drone_navigation::verticalOnlyHandoffConfigurationSafe;
 using drone_navigation::visualAlignmentVelocityEnu;
@@ -140,6 +141,22 @@ TEST(ReturnGuidance, UsesApproachClearanceOnlyInsideTheDescentRadius)
   EXPECT_NEAR(target.x, home.x, kTolerance);
   EXPECT_NEAR(target.y, home.y, kTolerance);
   EXPECT_NEAR(target.z, 1.185, kTolerance);
+}
+
+TEST(ReturnGuidance, DescentLatchNeverRearmsTransitAltitudeDuringReturn)
+{
+  const Vec3 home{4.55, -0.38, 1.13};
+
+  EXPECT_FALSE(updateReturnDescentLatch(
+    false, home, {4.58, -0.38, 1.80}, 0.02));
+  EXPECT_TRUE(updateReturnDescentLatch(
+    false, home, {4.569, -0.38, 1.80}, 0.02));
+  EXPECT_TRUE(updateReturnDescentLatch(
+    true, home, {4.59, -0.38, 1.50}, 0.02));
+
+  const auto latched_target = stagedReturnRawTarget(
+    home, {4.59, -0.38, 1.50}, 0.67, 0.055, 0.02, true);
+  EXPECT_NEAR(latched_target.z, 1.185, kTolerance);
 }
 
 TEST(ReturnGuidance, UsesTransitWaypointBeforeRoutingHome)
@@ -265,6 +282,26 @@ TEST(VoxelPlanner, DetoursAroundInflatedObstacle)
   for (std::size_t index = 1; index < path.size(); ++index) {
     EXPECT_TRUE(planner.collisionFree(path[index - 1], path[index]));
   }
+}
+
+TEST(VoxelPlanner, DetectsOnlyObstaclesOnTheRemainingAcceptedPath)
+{
+  PlannerConfig config;
+  config.resolution = 0.10;
+  config.inflation_radius = 0.0;
+  VoxelPlanner planner(config);
+  const std::vector<Vec3> accepted_path{
+    {0.0, 0.0, 1.0},
+    {1.0, 0.0, 1.0},
+    {2.0, 0.0, 1.0},
+    {3.0, 0.0, 1.0},
+  };
+
+  planner.setObstacles({{0.25, 0.0, 1.0}});
+  EXPECT_TRUE(planner.remainingPathCollisionFree({1.5, 0.0, 1.0}, accepted_path));
+
+  planner.setObstacles({{2.25, 0.0, 1.0}});
+  EXPECT_FALSE(planner.remainingPathCollisionFree({1.5, 0.0, 1.0}, accepted_path));
 }
 
 TEST(VoxelPlanner, UnreachableGoalHonorsExpansionBudget)
@@ -701,6 +738,13 @@ TEST(TrajectoryUpdates, ReturnSafetyPathCanPreemptAnAltitudeSag)
   EXPECT_TRUE(trajectoryMinimumAltitudeImproves(1.18, 1.72, 0.10));
   EXPECT_FALSE(trajectoryMinimumAltitudeImproves(1.70, 1.72, 0.10));
   EXPECT_FALSE(trajectoryMinimumAltitudeImproves(1.70, 1.60, 0.0));
+}
+
+TEST(TrajectoryUpdates, DynamicObstaclePreemptionRequiresRiskAndSafeReplacement)
+{
+  EXPECT_TRUE(drone_navigation::obstacleRiskAllowsTrajectoryReplacement(true, true));
+  EXPECT_FALSE(drone_navigation::obstacleRiskAllowsTrajectoryReplacement(false, true));
+  EXPECT_FALSE(drone_navigation::obstacleRiskAllowsTrajectoryReplacement(true, false));
 }
 
 TEST(TrajectoryUpdates, PlannerRecoveryCanReplaceAPathWithTheSameEndpoint)

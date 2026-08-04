@@ -595,7 +595,8 @@ Vec3 stagedReturnRawTarget(
   const Vec3 & raw_position,
   double transit_clearance,
   double approach_clearance,
-  double descent_radius)
+  double descent_radius,
+  bool descent_latched)
 {
   const std::array<double, 9> values{{
       raw_home.x, raw_home.y, raw_home.z,
@@ -613,9 +614,31 @@ Vec3 stagedReturnRawTarget(
   }
   const double horizontal_error = std::hypot(
     raw_position.x - raw_home.x, raw_position.y - raw_home.y);
-  const double clearance =
-    horizontal_error <= descent_radius ? approach_clearance : transit_clearance;
+  const double clearance = descent_latched || horizontal_error <= descent_radius ?
+    approach_clearance : transit_clearance;
   return {raw_home.x, raw_home.y, raw_home.z + clearance};
+}
+
+bool updateReturnDescentLatch(
+  bool currently_latched,
+  const Vec3 & raw_home,
+  const Vec3 & raw_position,
+  double descent_radius)
+{
+  const std::array<double, 7> values{{
+      raw_home.x, raw_home.y, raw_home.z,
+      raw_position.x, raw_position.y, raw_position.z,
+      descent_radius,
+    }};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+      return std::isfinite(value);
+    }) || descent_radius <= 0.0)
+  {
+    throw std::invalid_argument(
+            "return descent latch requires finite positions and a positive radius");
+  }
+  return currently_latched || std::hypot(
+    raw_position.x - raw_home.x, raw_position.y - raw_home.y) <= descent_radius;
 }
 
 bool returnTransitWaypointReached(
@@ -829,6 +852,13 @@ bool trajectoryMinimumAltitudeImproves(
   }
   return incoming_minimum_altitude >=
          current_minimum_altitude + required_improvement;
+}
+
+bool obstacleRiskAllowsTrajectoryReplacement(
+  bool accepted_remaining_path_has_collision,
+  bool incoming_path_collision_free)
+{
+  return accepted_remaining_path_has_collision && incoming_path_collision_free;
 }
 
 bool plannerRecoveryAllowsTrajectoryReplacement(
@@ -1123,6 +1153,30 @@ bool VoxelPlanner::collisionFree(const Vec3 & start, const Vec3 & goal) const
     if (impl_->occupied(point)) {
       return false;
     }
+  }
+  return true;
+}
+
+bool VoxelPlanner::remainingPathCollisionFree(
+  const Vec3 & current_position,
+  const std::vector<Vec3> & accepted_path) const
+{
+  if (accepted_path.empty()) {
+    return false;
+  }
+  const auto nearest = std::min_element(
+    accepted_path.begin(), accepted_path.end(),
+    [&current_position](const Vec3 & lhs, const Vec3 & rhs) {
+      return distance(current_position, lhs) < distance(current_position, rhs);
+    });
+  std::size_t index = static_cast<std::size_t>(
+    std::distance(accepted_path.begin(), nearest));
+  Vec3 previous = current_position;
+  for (; index < accepted_path.size(); ++index) {
+    if (!collisionFree(previous, accepted_path[index])) {
+      return false;
+    }
+    previous = accepted_path[index];
   }
   return true;
 }
