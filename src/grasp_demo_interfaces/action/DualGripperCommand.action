@@ -1,0 +1,17 @@
+# Two-channel gripper command. Each side accepts the same vocabulary as
+# ``GripperCommand``; the server returns one result per side so callers can
+# detect asymmetric faults (e.g. left gripper jammed).
+string left_command
+float32 left_position
+float32 left_speed
+bool left_wait_for_completion
+---
+bool success
+string message
+float32 left_final_position
+float32 right_final_position
+---
+string left_state
+string right_state
+float32 left_current_position
+float32 right_current_position

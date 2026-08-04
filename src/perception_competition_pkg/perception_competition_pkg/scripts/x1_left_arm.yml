@@ -1,0 +1,80 @@
+## SPDX-License-Identifier: Apache-2.0
+## Mercury X1 left arm -- 6-DOF cuRobo config (format_version 2.0).
+##
+## Mirrors the X1 USD prim paths under
+## ``/World/layout/mercury_x1_final/mercury_x1/link_*``. The
+## x1_left_arm.urdf must live next to this file in
+## ``curobo/content/configs/robot/``.
+
+robot_cfg:
+  kinematics:
+    format_version: 2.0
+    asset_root_path: .
+    urdf_path: robot/x1_left_arm.urdf
+    base_link: base_link
+    collision_link_names:
+      - base_link
+      - link_1
+      - link_2
+      - link_3
+      - link_4
+      - link_5
+      - link_6
+      - tool
+    tool_frames:
+      - tool
+    collision_sphere_buffer: 0.0
+    collision_spheres:
+      base_link:
+        - center: [0, 0, 0.05]
+          radius: 0.06
+      link_1:
+        - center: [0, 0, 0.10]
+          radius: 0.05
+      link_2:
+        - center: [0, 0, 0.09]
+          radius: 0.045
+      link_3:
+        - center: [0, 0, 0.05]
+          radius: 0.04
+      link_4:
+        - center: [0, 0, 0.03]
+          radius: 0.03
+      link_5:
+        - center: [0, 0, 0.025]
+          radius: 0.025
+      link_6:
+        - center: [0, 0, 0.025]
+          radius: 0.022
+      tool:
+        - center: [0, 0, 0.025]
+          radius: 0.025
+    cspace:
+      joint_names:
+        - arm_left_joint_1
+        - arm_left_joint_2
+        - arm_left_joint_3
+        - arm_left_joint_4
+        - arm_left_joint_5
+        - arm_left_joint_6
+      default_joint_position: [0.0, -0.4, 0.6, -0.2, 0.0, 0.0]
+      null_space_weight: [0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      max_jerk: 500.0
+      max_acceleration: 30.0
+    self_collision_buffer:
+      base_link: 0.0
+      link_1: 0.0
+      link_2: 0.0
+      link_3: 0.0
+      tool: 0.0
+    self_collision_ignore: {}
+    mesh_link_names:
+      - base_link
+      - link_1
+      - link_2
+      - link_3
+      - link_4
+      - link_5
+      - link_6
+      - tool
