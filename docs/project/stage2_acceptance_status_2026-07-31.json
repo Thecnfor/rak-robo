@@ -1,0 +1,32 @@
+{
+  "schema": "robotac_stage2_acceptance_status/v1",
+  "audited_candidate_bags": 26,
+  "strict_full_flow_passes": 2,
+  "current_consecutive_full_passes": 0,
+  "strict_pass_bags": [
+    "bags/stage2_fullflow_20260731_1350",
+    "bags/stage2_fullflow_20260731_1500"
+  ],
+  "measured_drop_attempts": 8,
+  "drops_within_0_2_m": 7,
+  "drop_success_rate": 0.875,
+  "ten_consecutive_flights_ok": false,
+  "drop_acceptance_ok": false,
+  "minimum_new_consecutive_full_passes": 10,
+  "synthetic_runtime_preemption": {
+    "passed": true,
+    "evidence_kind": "synthetic_pointcloud_runtime_preemption",
+    "first_trajectory_id": 1,
+    "preempting_trajectory_id": 2,
+    "planner_state": "ACTIVE_OBSTACLE_REPLAN",
+    "executor_state": "TRAJECTORY_ACCEPTED id=2 reason=obstacle"
+  },
+  "physical_dynamic_obstacle": {
+    "passed": false,
+    "reason": "Isaac Sim 5.1 Full Kit RTX LiDAR MotionBVH did not consume runtime visibility changes",
+    "strict_probe_baseline_max_points": 254,
+    "strict_probe_spawned_max_points": 255
+  },
+  "truth_interface_compliance": "awaiting_written_confirmation_or_sensor_only_replacement",
+  "formal_one_take_video": "not_recorded"
+}

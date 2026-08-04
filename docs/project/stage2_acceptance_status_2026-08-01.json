@@ -1,0 +1,94 @@
+{
+  "runs": [
+    {
+      "bag": "bags/stage2_fullflow_20260801_0446",
+      "drop_attempted": true,
+      "drop_error_m": 0.022756233491560838,
+      "drop_within_0_2_m": true,
+      "failed_checks": [],
+      "final_landed": true,
+      "maximum_truth_speed_mps": 0.6165650794236931,
+      "passed": true,
+      "payload_stationary": true,
+      "phase_sequence": [
+        "IDLE",
+        "PREFLIGHT",
+        "ARMING",
+        "TAKEOFF",
+        "EGO_TRANSIT",
+        "TARGET_SEARCH",
+        "VISUAL_ALIGN",
+        "DROP_HOLD",
+        "RETURN",
+        "LAND",
+        "COMPLETE"
+      ],
+      "phase_sequence_ok": true,
+      "px4_failsafe_seen": false
+    },
+    {
+      "bag": "bags/stage2_fullflow_20260801_0537",
+      "drop_attempted": true,
+      "drop_error_m": 0.009149061932676603,
+      "drop_within_0_2_m": true,
+      "failed_checks": [],
+      "final_landed": true,
+      "maximum_truth_speed_mps": 0.6066038519747371,
+      "passed": true,
+      "payload_stationary": true,
+      "phase_sequence": [
+        "IDLE",
+        "PREFLIGHT",
+        "ARMING",
+        "TAKEOFF",
+        "EGO_TRANSIT",
+        "TARGET_SEARCH",
+        "VISUAL_ALIGN",
+        "DROP_HOLD",
+        "RETURN",
+        "LAND",
+        "COMPLETE"
+      ],
+      "phase_sequence_ok": true,
+      "px4_failsafe_seen": false
+    },
+    {
+      "bag": "bags/stage2_fullflow_20260801_0618",
+      "drop_attempted": true,
+      "drop_error_m": 0.010903469308533913,
+      "drop_within_0_2_m": true,
+      "failed_checks": [],
+      "final_landed": true,
+      "maximum_truth_speed_mps": 0.6476588160489984,
+      "passed": true,
+      "payload_stationary": true,
+      "phase_sequence": [
+        "IDLE",
+        "PREFLIGHT",
+        "ARMING",
+        "TAKEOFF",
+        "EGO_TRANSIT",
+        "TARGET_SEARCH",
+        "VISUAL_ALIGN",
+        "DROP_HOLD",
+        "RETURN",
+        "LAND",
+        "COMPLETE"
+      ],
+      "phase_sequence_ok": true,
+      "px4_failsafe_seen": false
+    }
+  ],
+  "schema": "robotac_stage2_acceptance/v1",
+  "summary": {
+    "consecutive_successful_runs": 3,
+    "drop_acceptance_ok": false,
+    "drop_success_rate": 1.0,
+    "drop_within_0_2_m": 3,
+    "measured_drops": 3,
+    "passed": false,
+    "run_count": 3,
+    "successful_runs": 3,
+    "ten_consecutive_flights_ok": false
+  }
+}

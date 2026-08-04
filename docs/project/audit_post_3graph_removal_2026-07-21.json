@@ -1,0 +1,1001 @@
+{
+  "ok": true,
+  "missing": [],
+  "unpublished": [],
+  "disconnected_commands": [],
+  "unique_fmu_writer": true,
+  "multiple_fmu_writers": [],
+  "invalid_fmu_writers": {},
+  "resolved_topics": {
+    "/clock": "/clock",
+    "/tf": "/tf",
+    "/drone0/state/pose": "/drone0/state/pose",
+    "/drone0/state/twist": "/drone0/state/twist",
+    "/drone0/state/twist_inertial": "/drone0/state/twist_inertial",
+    "/drone0/state/accel": "/drone0/state/accel",
+    "/drone0/sensors/imu": "/drone0/sensors/imu",
+    "/drone0/sensors/mag": "/drone0/sensors/mag",
+    "/drone0/sensors/gps": "/drone0/sensors/gps",
+    "/drone0/sensors/gps_twist": "/drone0/sensors/gps_twist",
+    "/avoidance/lidar/pointcloud": "/avoidance/lidar/pointcloud",
+    "/drone_0_ego_odom": "/drone_0_ego_odom",
+    "/drone0/down_camera/color/image_raw": "/drone0/down_camera/color/image_raw",
+    "/cargo_bay/command": "/cargo_bay/command",
+    "/cargo_bay/status": "/cargo_bay/status",
+    "/fmu/out/vehicle_odometry": "/fmu/out/vehicle_odometry",
+    "/fmu/out/vehicle_status": "/fmu/out/vehicle_status_v1",
+    "/fmu/out/vehicle_command_ack": "/fmu/out/vehicle_command_ack",
+    "/fmu/out/vehicle_land_detected": "/fmu/out/vehicle_land_detected",
+    "/fmu/in/offboard_control_mode": "/fmu/in/offboard_control_mode",
+    "/fmu/in/trajectory_setpoint": "/fmu/in/trajectory_setpoint",
+    "/fmu/in/vehicle_command": "/fmu/in/vehicle_command"
+  },
+  "topics": {
+    "/clock": {
+      "required_name": "/clock",
+      "actual_name": "/clock",
+      "types": [
+        "rosgraph_msgs/msg/Clock"
+      ],
+      "observed_frequency_hz": 3.453,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/_World_layout_mercury_x1_final_mercury_x1_Graph_ROS_Clock_ros2_publish_clock",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/px4_state_adapter",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/trajectory_executor",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/flight_supervisor",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_target_detector",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/air_ground_orchestrator",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/tf": {
+      "required_name": "/tf",
+      "actual_name": "/tf",
+      "types": [
+        "tf2_msgs/msg/TFMessage"
+      ],
+      "observed_frequency_hz": 5.693,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/_World_CargoAvoidanceStateGraph_PublishBaseTf",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/_World_layout_mercury_x1_final_mercury_x1_Graph_transform_tree_odometry_ros2_publish_transform_tree_base_link",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/_World_layout_mercury_x1_final_mercury_x1_Graph_transform_tree_odometry_ros2_publish_raw_transform_tree",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/_World_layout_mercury_x1_final_mercury_x1_Graph_transform_tree_odometry_ros2_publish_transform_tree_to_sensor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/_World_layout_mercury_x1_final_mercury_x1_Graph_transform_tree_odometry_ros2_publish_transform_tree_to_wheel",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/state/pose": {
+      "required_name": "/drone0/state/pose",
+      "actual_name": "/drone0/state/pose",
+      "types": [
+        "geometry_msgs/msg/PoseStamped"
+      ],
+      "observed_frequency_hz": 13.81,
+      "frame_ids": [
+        "map"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 847522660
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/state/twist": {
+      "required_name": "/drone0/state/twist",
+      "actual_name": "/drone0/state/twist",
+      "types": [
+        "geometry_msgs/msg/TwistStamped"
+      ],
+      "observed_frequency_hz": 13.81,
+      "frame_ids": [
+        "drone_base_link"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 847522660
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/state/twist_inertial": {
+      "required_name": "/drone0/state/twist_inertial",
+      "actual_name": "/drone0/state/twist_inertial",
+      "types": [
+        "geometry_msgs/msg/TwistStamped"
+      ],
+      "observed_frequency_hz": 13.813,
+      "frame_ids": [
+        "map"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 847522660
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/state/accel": {
+      "required_name": "/drone0/state/accel",
+      "actual_name": "/drone0/state/accel",
+      "types": [
+        "geometry_msgs/msg/AccelStamped"
+      ],
+      "observed_frequency_hz": 13.813,
+      "frame_ids": [
+        "map"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 847522660
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/sensors/imu": {
+      "required_name": "/drone0/sensors/imu",
+      "actual_name": "/drone0/sensors/imu",
+      "types": [
+        "sensor_msgs/msg/Imu"
+      ],
+      "observed_frequency_hz": 13.814,
+      "frame_ids": [
+        "drone_base_link_frd"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 844823616
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/sensors/mag": {
+      "required_name": "/drone0/sensors/mag",
+      "actual_name": "/drone0/sensors/mag",
+      "types": [
+        "sensor_msgs/msg/MagneticField"
+      ],
+      "observed_frequency_hz": 13.813,
+      "frame_ids": [
+        "base_link_frd"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 845854343
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/sensors/gps": {
+      "required_name": "/drone0/sensors/gps",
+      "actual_name": "/drone0/sensors/gps",
+      "types": [
+        "sensor_msgs/msg/NavSatFix"
+      ],
+      "observed_frequency_hz": 13.812,
+      "frame_ids": [
+        "map_ned"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 846524476
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/sensors/gps_twist": {
+      "required_name": "/drone0/sensors/gps_twist",
+      "actual_name": "/drone0/sensors/gps_twist",
+      "types": [
+        "geometry_msgs/msg/TwistStamped"
+      ],
+      "observed_frequency_hz": 13.812,
+      "frame_ids": [
+        "map_ned"
+      ],
+      "last_header_stamp": {
+        "sec": 1784604142,
+        "nanosec": 846524476
+      },
+      "publishers": [
+        {
+          "node": "/simulator_vehicle_0",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/avoidance/lidar/pointcloud": {
+      "required_name": "/avoidance/lidar/pointcloud",
+      "actual_name": "/avoidance/lidar/pointcloud",
+      "types": [
+        "sensor_msgs/msg/PointCloud2"
+      ],
+      "observed_frequency_hz": 3.476,
+      "frame_ids": [
+        "avoidance_lidar"
+      ],
+      "last_header_stamp": {
+        "sec": 6,
+        "nanosec": 344000301
+      },
+      "publishers": [
+        {
+          "node": "/_Render_PostProcess_SDGPipeline_avoidance_lidar_NodeWriterWriter",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/flight_supervisor",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone_0_ego_odom": {
+      "required_name": "/drone_0_ego_odom",
+      "actual_name": "/drone_0_ego_odom",
+      "types": [
+        "nav_msgs/msg/Odometry"
+      ],
+      "observed_frequency_hz": 3.411,
+      "frame_ids": [
+        "map"
+      ],
+      "last_header_stamp": {
+        "sec": 6,
+        "nanosec": 360000302
+      },
+      "publishers": [
+        {
+          "node": "/_World_CargoAvoidanceStateGraph_PublishOdom",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/drone0/down_camera/color/image_raw": {
+      "required_name": "/drone0/down_camera/color/image_raw",
+      "actual_name": "/drone0/down_camera/color/image_raw",
+      "types": [
+        "sensor_msgs/msg/Image"
+      ],
+      "observed_frequency_hz": 3.286,
+      "frame_ids": [
+        "down_camera"
+      ],
+      "last_header_stamp": {
+        "sec": 6,
+        "nanosec": 344000301
+      },
+      "publishers": [
+        {
+          "node": "/drone0/_Render_PostProcess_SDGPipeline_Replicator_NodeWriterWriter",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_target_detector",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/cargo_bay/command": {
+      "required_name": "/cargo_bay/command",
+      "actual_name": "/cargo_bay/command",
+      "types": [
+        "std_msgs/msg/String"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/flight_supervisor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/air_ground_orchestrator",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/cargo_delivery_scene_3883161",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/cargo_bay/status": {
+      "required_name": "/cargo_bay/status",
+      "actual_name": "/cargo_bay/status",
+      "types": [
+        "std_msgs/msg/String"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/cargo_delivery_scene_3883161",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/flight_supervisor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/air_ground_orchestrator",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/out/vehicle_odometry": {
+      "required_name": "/fmu/out/vehicle_odometry",
+      "actual_name": "/fmu/out/vehicle_odometry",
+      "types": [
+        "px4_msgs/msg/VehicleOdometry"
+      ],
+      "observed_frequency_hz": 97.813,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "TRANSIENT_LOCAL",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/px4_state_adapter",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/out/vehicle_status": {
+      "required_name": "/fmu/out/vehicle_status",
+      "actual_name": "/fmu/out/vehicle_status_v1",
+      "types": [
+        "px4_msgs/msg/VehicleStatus"
+      ],
+      "observed_frequency_hz": 1.941,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "TRANSIENT_LOCAL",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/px4_state_adapter",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/trajectory_executor",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/out/vehicle_command_ack": {
+      "required_name": "/fmu/out/vehicle_command_ack",
+      "actual_name": "/fmu/out/vehicle_command_ack",
+      "types": [
+        "px4_msgs/msg/VehicleCommandAck"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "TRANSIENT_LOCAL",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/px4_state_adapter",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/out/vehicle_land_detected": {
+      "required_name": "/fmu/out/vehicle_land_detected",
+      "actual_name": "/fmu/out/vehicle_land_detected",
+      "types": [
+        "px4_msgs/msg/VehicleLandDetected"
+      ],
+      "observed_frequency_hz": 0.978,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "TRANSIENT_LOCAL",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "/px4_state_adapter",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/in/offboard_control_mode": {
+      "required_name": "/fmu/in/offboard_control_mode",
+      "actual_name": "/fmu/in/offboard_control_mode",
+      "types": [
+        "px4_msgs/msg/OffboardControlMode"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/trajectory_executor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/in/trajectory_setpoint": {
+      "required_name": "/fmu/in/trajectory_setpoint",
+      "actual_name": "/fmu/in/trajectory_setpoint",
+      "types": [
+        "px4_msgs/msg/TrajectorySetpoint"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/trajectory_executor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    },
+    "/fmu/in/vehicle_command": {
+      "required_name": "/fmu/in/vehicle_command",
+      "actual_name": "/fmu/in/vehicle_command",
+      "types": [
+        "px4_msgs/msg/VehicleCommand"
+      ],
+      "observed_frequency_hz": 0.0,
+      "frame_ids": [],
+      "last_header_stamp": null,
+      "publishers": [
+        {
+          "node": "/trajectory_executor",
+          "qos": {
+            "reliability": "RELIABLE",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ],
+      "subscribers": [
+        {
+          "node": "_CREATED_BY_BARE_DDS_APP_/_CREATED_BY_BARE_DDS_APP_",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        },
+        {
+          "node": "/drone_interface_audit",
+          "qos": {
+            "reliability": "BEST_EFFORT",
+            "durability": "VOLATILE",
+            "history": "UNKNOWN",
+            "depth": "0"
+          }
+        }
+      ]
+    }
+  }
+}

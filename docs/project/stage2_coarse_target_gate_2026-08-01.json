@@ -1,0 +1,27 @@
+{
+  "schema": "robotac_stage2_coarse_target_gate/v1",
+  "passed": true,
+  "validation_only": true,
+  "counts_toward_consecutive_regression": false,
+  "bag": "bags/stage2_coarse_target_tffix_20260801_0310",
+  "drop_search_pose_m": [5.5, -3.3, 1.8],
+  "lidar_static_tf": {
+    "parent": "avoidance_base_link",
+    "child": "avoidance_lidar",
+    "translation_m": [0.0, 0.0, 0.12],
+    "rotation_xyzw": [0.70710678, 0.0, 0.0, 0.70710678]
+  },
+  "coarse_goal_min_obstacle_distance_m": 1.480,
+  "target_search": {
+    "elapsed_s": 788.707,
+    "truth_position_m": [5.4259, -3.1132, 1.8074]
+  },
+  "visual_align": {
+    "elapsed_s": 788.757,
+    "truth_position_m": [5.4259, -3.1132, 1.8074]
+  },
+  "termination": "operator LAND after gate pass",
+  "landed": true,
+  "disarmed": true,
+  "px4_failsafe": false
+}

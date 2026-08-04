@@ -1,0 +1,42 @@
+{
+  "runs": [
+    {
+      "bag": "bags/stage2_fullflow_20260801_0618",
+      "drop_attempted": true,
+      "drop_error_m": 0.010903469308533913,
+      "drop_within_0_2_m": true,
+      "failed_checks": [],
+      "final_landed": true,
+      "maximum_truth_speed_mps": 0.6476588160489984,
+      "passed": true,
+      "payload_stationary": true,
+      "phase_sequence": [
+        "IDLE",
+        "PREFLIGHT",
+        "ARMING",
+        "TAKEOFF",
+        "EGO_TRANSIT",
+        "TARGET_SEARCH",
+        "VISUAL_ALIGN",
+        "DROP_HOLD",
+        "RETURN",
+        "LAND",
+        "COMPLETE"
+      ],
+      "phase_sequence_ok": true,
+      "px4_failsafe_seen": false
+    }
+  ],
+  "schema": "robotac_stage2_acceptance/v1",
+  "summary": {
+    "consecutive_successful_runs": 1,
+    "drop_acceptance_ok": false,
+    "drop_success_rate": 1.0,
+    "drop_within_0_2_m": 1,
+    "measured_drops": 1,
+    "passed": false,
+    "run_count": 1,
+    "successful_runs": 1,
+    "ten_consecutive_flights_ok": false
+  }
+}

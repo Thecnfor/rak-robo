@@ -1,0 +1,25 @@
+{
+  "schema": "robotac_stage2_regression_run/v1",
+  "run_index": 1,
+  "required_consecutive_runs": 10,
+  "bag": "bags/stage2_fullflow_20260801_0446",
+  "interface_report": "/tmp/stage2_interface_20260801_0446.json",
+  "raw_video": "videos_raw/20260801_045136-预选赛加分1-全流程_raw.mp4",
+  "raw_video_duration_s": 2022.0,
+  "raw_video_resolution": [1920, 1080],
+  "raw_video_fps": 30,
+  "phase_sequence": [
+    "IDLE", "PREFLIGHT", "ARMING", "TAKEOFF", "EGO_TRANSIT",
+    "TARGET_SEARCH", "VISUAL_ALIGN", "DROP_HOLD", "RETURN", "LAND",
+    "COMPLETE"
+  ],
+  "drop_error_m": 0.022756233491560838,
+  "drop_within_0_2_m": true,
+  "payload_stationary": true,
+  "maximum_truth_speed_mps": 0.6165650794236931,
+  "px4_failsafe_seen": false,
+  "final_landed": true,
+  "final_disarmed": true,
+  "passed": true,
+  "consecutive_successful_runs": 1
+}
