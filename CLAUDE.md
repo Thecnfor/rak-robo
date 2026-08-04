@@ -17,6 +17,27 @@ cd /var/workspace/docker/isaac/workspace
 source /opt/ros/jazzy/setup.bash
 ```
 
+## Local development vs Socl
+
+Code is developed locally and synced to Socl through GitHub (the only
+interchange). The two environments differ and are not interchangeable:
+
+- **Socl** (`/var/workspace/docker/isaac/workspace`): ROS 2 Jazzy,
+  Ubuntu 24.04, Python 3.12. Authoritative build, PX4 SITL, Isaac Sim
+  5.1, real-machine verification. `ROS_DOMAIN_ID=45` is the live
+  competition domain.
+- **Local** (`~/Desktop/ROBOTAC/rak-robo`): ROS 2 Lyrical, Ubuntu 26.04,
+  Python 3.14. Code editing and logic regression only. Do **not** set
+  `ROS_DOMAIN_ID` locally — there are no DDS peers, so everything fails
+  closed and cannot disturb the live stack.
+
+Local build/test caveats and the full dev loop live in
+`docs/runbooks/local_dev.md`. Key points: the interactive shell is zsh,
+so source ROS inside bash
+(`bash -c 'source /opt/ros/lyrical/setup.bash && ...'`); locally skip
+`nav2_demo_pkg` (Nav2 is not yet released for Lyrical) and `px4_ros_com`
+(uses a CMake API removed in Lyrical).
+
 ## Build, test, and lint commands
 
 Build the whole workspace, or select a package when iterating:
@@ -33,7 +54,7 @@ source install/setup.bash
 The UAV packages have checked-in tests: `drone_navigation_pkg` uses gtest for frames, planning, B-spline feasibility, and supervisor safety; perception, orchestrator, and bridge use Python unit tests discovered through their `setup.py` test suites.
 
 ```bash
-colcon test --packages-select drone_navigation_pkg perception_competition_pkg competition_orchestrator_pkg bridge_competition_pkg
+colcon test --packages-select drone_navigation_pkg perception_competition_pkg competition_orchestrator_pkg bridge_competition_pkg dual_arm_pkg
 colcon test-result --verbose
 ```
 
@@ -58,6 +79,27 @@ ros2 run bridge_competition_pkg drone_interface_audit \
 ros2 run bridge_competition_pkg direct_rotor_smoke_test \
   --ros-args -p enabled:=true -p rotor_speed_rad_s:=60.0
 ```
+
+## Package build conventions
+
+- **C++ targets**: link dependencies with
+  `target_link_libraries(tgt ${pkg}_TARGETS)` (imported targets). Do
+  **not** use `ament_target_dependencies()` — it was removed in ROS 2
+  Lyrical; `drone_navigation_pkg` has already been migrated. The
+  imported-target idiom works on both Jazzy and Lyrical.
+- **ament_python tests**: `colcon test` discovers tests via
+  `test_suite='test'` in `setup.py` plus an empty `test/__init__.py`.
+  See `bridge_competition_pkg` and `dual_arm_pkg` for the pattern.
+  `grasp_demo_pkg` and `isaac_ros2_control` have no test suite.
+- **Two test tiers**: instant (no build, no source) runs pure-Python
+  logic in <1 s — `test_hover_probe_core`, `test_dynamic_obstacle_probe`,
+  `test_interface_contract`, `test_stage2_acceptance`, `test_pick_place`.
+  Full (`colcon test`) adds the 62-case `test_flight_core` gtest
+  (coordinate frames, return/descent latch, voxel planner, B-spline
+  feasibility, supervisor state machine) plus the remaining packages.
+- **New interfaces** (`.msg`/`.action`/`.srv`): rebuild
+  `grasp_demo_interfaces` first, then dependents. Current examples:
+  `DualGripperCommand.action` and `Trajectory.msg`'s `preemption_reason`.
 
 ## Running the demos
 
