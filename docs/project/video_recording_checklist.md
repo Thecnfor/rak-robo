@@ -5,6 +5,23 @@
 > 赛段二现场顺序与安全门以 `docs/project/stage2_demo_runbook.md` 为准；本页只列镜头内容。
 > 录制环境：VNC `:5900` 密码 `robo2026`，Isaac Sim + Pegasus 跑 PX4+UAV+双臂视觉。
 > 录制工具：`ffmpeg -f x11grab -video_size 1920x1080 -framerate 30 -i :99 ...`
+> 2026-07-31 状态：Pegasus+PX4 已真实跑通完整 11 相位，禁止继续使用下文历史 SIH/
+> “只到 ARMING”说法。历史统计为 2 次严格完整成功、
+> 当前连续成功 3 次；结合此前样本，11 次真实投放中 10 次命中（90.9%）。
+> 2026-08-01 状态：RTX LiDAR TF 根因已修复，新粗目标实飞进入
+> `TARGET_SEARCH/VISUAL_ALIGN`；门禁包不计数，下一轮正式录屏并开始新的连续回归。
+> 首次录屏尝试因近场返架 2 cm 高度切换抖振改为诊断票据；已实现单向下降锁存。
+> 正式录屏改用 T4 `h264_nvenc`，避免 `libx264` 与 Isaac 争用 CPU；复验通过前不出片。
+> 锁存复验包 `stage2_fullflow_20260801_0446` 已完整通过，并保存 1920×1080/30 fps
+> 连续原片 `20260801_045136-预选赛加分1-全流程_raw.mp4`。2026-08-02 已从该单一
+> 原片生成 12×等速压缩、无剪切/无拼接的正式文件
+> `videos/预选赛加分1-全流程.mp4`；168.5 s、1920×1080/30 fps、H.264，满足
+> ≤3 分钟要求，左上角常驻“12×加速｜全程连续无剪辑”。SHA-256：
+> `751abda75fbfe6919a305b964647ef2d4f2568aab71cc9fdcb39074324789e24`。
+> 第二轮 `stage2_fullflow_20260801_0537` 也已严格通过，投放误差 0.915 cm；该轮未
+> 额外录屏，以避免编码负载干扰连续回归。
+> 第三轮 `stage2_fullflow_20260801_0618` 严格通过，投放误差 1.090 cm；连续计数
+> 更新为 3/10。
 
 ## 命名规则（不能动）
 ```
@@ -112,10 +129,10 @@ XX队占位 → 全局替换为真实队名。
 
 ### 段 10 — 预选赛赛段2任务5-投放执行
 **内容**：
-1. 不在飞行中录：先停飞、停 PX4、重载场景并锁定 payload
-2. 在 PX4 未启动时执行 `CONFIRM_CARGO_RELEASE=YES bash docs/project/stage2_demo_control.sh release-payload`
-3. VNC 中看到真实底舱门打开、payload 落到桌面、`/cargo_bay/status=bottom_opened payload_released`
-4. 文字说明：完整 `DROP_HOLD → RETURN → LAND → COMPLETE` 状态机链路（`docs/project/diagrams/flight_supervisor.mmd`）也展示在图中
+1. 在完整 Pegasus+PX4 任务中连续录制 `VISUAL_ALIGN → DROP_HOLD`，不得切镜头或手工开门
+2. VNC 中看到真实底舱门打开、payload 落入圆内，状态为 `bottom_opened payload_released`
+3. 继续保留 `RETURN → LAND → COMPLETE` 与自动 disarm 画面
+4. 隔离的 `release-payload` 命令只用于机构烟测，不得代替本段飞行证据
 
 **时长**：2 分钟
 
@@ -133,11 +150,11 @@ XX队占位 → 全局替换为真实队名。
 
 ### 加分 1 — 全流程
 **内容**：
-1. 同一 VNC 录制 3 分钟：
-   - 启动 host_bridge_bringup
-   - 启动 cargo_status_sim + ground_state_sim + mission_trigger
-   - chain_status 一路看：IDLE → PREFLIGHT → ARMING → TAKEOFF
-2. 文字说明：因 SIH 物理限制，演示到 ARMING 后通过 set_mode 强制切 Offboard
+1. 同一 VNC 连续录制真实 X1 场景、Pegasus、PX4 和 host chain；不得使用 SIH、
+   `cargo_status_sim`、重复触发或强制切模式
+2. 展示一次真实地面 `COMPLETE` 后完整经过 `IDLE → PREFLIGHT → ARMING → TAKEOFF →
+   EGO_TRANSIT → TARGET_SEARCH → VISUAL_ALIGN → DROP_HOLD → RETURN → LAND → COMPLETE`
+3. 同屏保留门动作、下视画面、规划轨迹、落点和最终 disarm；原始长录像不得拼接
 
 **时长**：3 分钟
 
@@ -169,9 +186,9 @@ XX队占位 → 全局替换为真实队名。
 
 ### 加分 5 — 无人机投放突出
 **内容**：
-1. 演示完整的 `state` 11 相位机（mission_gate.png + flight_supervisor.png）
-2. 实际只跑到 ARMING（无人机投放 0.2m 验收因 PX4 SIH Offboard 接受 quirk 推迟到比赛当天）
-3. 文字说明："链路验证：发布 mission_request 后 IDLE→PREFLIGHT→ARMING 全程走通，安全门工作正常；Offboard 进入受 PX4 v1.16 切换模式 quirk 限制"
+1. 演示真实完整 11 相位及 EGO、下视视觉 PID、底舱释放和精准落点
+2. 引用严格 rosbag 审计的逐轮落点数据；未达到至少 10 次/90% 前必须明确标注“统计未关闭”
+3. 展示 `/fmu/in/*` 唯一写入者与无 PX4 failsafe 证据，不再引用历史 SIH Offboard quirk
 
 **时长**：2 分钟
 

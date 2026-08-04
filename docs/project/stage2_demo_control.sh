@@ -32,7 +32,8 @@ Operator actions:
   abort                  Send the public ABORT safety action.
 
 Video capture:
-  record-start <1..6>    Start VNC capture with the required stage-2 filename.
+  record-start <1..6|full>
+                         Start VNC capture with the required stage-2 filename.
   record-stop            Stop the active capture cleanly.
   record-status          Show the active capture and raw output path.
 
@@ -200,10 +201,16 @@ mission() {
 
 safety_action() {
   local command="$1"
+  local command_id
+  case "${command}" in
+    LAND) command_id=4 ;;
+    ABORT) command_id=5 ;;
+    *) echo "ERROR: unsupported safety action ${command}." >&2; return 2 ;;
+  esac
   source_ros
   run_mutating ros2 action send_goal /drone/flight_command \
     grasp_demo_interfaces/action/DroneFlightCommand \
-    "{command: ${command}, position_tolerance: 0.2}"
+    "{command: ${command_id}, position_tolerance: 0.2}"
 }
 
 record_start() {
@@ -216,7 +223,8 @@ record_start() {
     4) label='视觉对准' ;;
     5) label='投放执行' ;;
     6) label='精准度' ;;
-    *) echo 'ERROR: record-start requires a task number from 1 to 6.' >&2; return 2 ;;
+    full) label='全流程' ;;
+    *) echo 'ERROR: record-start requires a task number from 1 to 6, or full.' >&2; return 2 ;;
   esac
   if record_status >/dev/null 2>&1; then
     echo 'ERROR: a recording is already active; run record-stop first.' >&2
@@ -228,18 +236,30 @@ record_start() {
   fi
 
   local timestamp output
+  local -a encoder_args
   timestamp="$(date -u +%Y%m%d_%H%M%S)"
-  output="${RAW_DIR}/${timestamp}-预选赛赛段2任务${task}-${label}_raw.mp4"
-  print_cmd ffmpeg -f x11grab -video_size 1920x1080 -framerate 30 \
-    -i "${DISPLAY_ID}" -c:v libx264 -preset veryfast -crf 23 \
+  if [[ "${task}" == "full" ]]; then
+    output="${RAW_DIR}/${timestamp}-预选赛加分1-${label}_raw.mp4"
+  else
+    output="${RAW_DIR}/${timestamp}-预选赛赛段2任务${task}-${label}_raw.mp4"
+  fi
+  if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q 'h264_nvenc'; then
+    # NVENC uses the T4's dedicated encoder and avoids starving Isaac/RTX
+    # LiDAR with a multi-core libx264 capture during precision landing.
+    encoder_args=(-c:v h264_nvenc -preset p4 -cq 23 -b:v 0)
+  else
+    encoder_args=(-c:v libx264 -preset veryfast -crf 23)
+  fi
+  print_cmd ffmpeg -nostdin -f x11grab -video_size 1920x1080 -framerate 30 \
+    -i "${DISPLAY_ID}" "${encoder_args[@]}" \
     -pix_fmt yuv420p "${output}"
   if [[ "${DRY_RUN}" == "1" ]]; then
     return 0
   fi
 
-  nohup ffmpeg -hide_banner -loglevel warning -y \
+  nohup ffmpeg -nostdin -hide_banner -loglevel warning -y \
     -f x11grab -video_size 1920x1080 -framerate 30 -i "${DISPLAY_ID}" \
-    -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+    "${encoder_args[@]}" -pix_fmt yuv420p \
     "${output}" >"${record_log_file}" 2>&1 &
   local pid=$!
   printf '%s\n' "${pid}" >"${record_pid_file}"

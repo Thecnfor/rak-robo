@@ -88,6 +88,7 @@ PX4 输出订阅使用 `BEST_EFFORT/VOLATILE`。Offboard 以 20 Hz 发送，先�
 | 输入 | `/drone/drop_target_offset` | `[nx, ny, area_fraction, radius_px]` |
 | 输出 | `/drone/navigation/odometry` | `nav_msgs/Odometry`, PX4 NED/FRD → map ENU/FLU |
 | 输出 | `/drone/navigation/trajectory` | `drone_navigation_pkg/Trajectory` |
+| executor → planner | `/drone/navigation/accepted_trajectory_id` | `std_msgs/UInt32`；规划器仅对执行器已接纳轨迹的剩余段做动态碰撞检查 |
 | 输出 | `/drone/navigation/planned_path` | `nav_msgs/Path` |
 | 输出 | `/drone/navigation/state` | 任务状态机状态 |
 | 输出 | `/drone/navigation/{planner_state,executor_state,px4_status,px4_command_ack}` | 诊断；`planner_state` 包含 `map_ready/map_age/tf_age` |
@@ -102,6 +103,12 @@ IDLE → PREFLIGHT → ARMING → TAKEOFF → EGO_TRANSIT → TARGET_SEARCH
 
 数据陈旧或 PX4 failsafe 进入 `HOLD`：0.60 秒悬停，1.20 秒请求 PX4 Land。
 安全新鲜度使用 steady wall time；轨迹采样使用 `/clock`。
+
+验收工具另保留三个**可选、测试专用**接口，不属于比赛 bringup 必需项：
+`/drone/test/dynamic_obstacle_{command,status}` (`std_msgs/String`) 与
+`/drone/test/preemption_cloud` (`sensor_msgs/PointCloud2`)。前两者仅在场景显式设置
+`ENABLE_DYNAMIC_OBSTACLE_TEST=1` 时存在；合成点云探针拒绝在比赛 Domain 45 运行。
+对应 code-as-spec 为 `interface_audit.py::OPTIONAL_ACCEPTANCE_TEST_TOPICS`。
 
 `ARM_FIXED/FIXED` 是 PX4 定点控制诊断模式：必须同时以 launch 参数显式设置
 `allow_fixed_setpoint_diagnostic=true`，默认和比赛主链均为 `false`。它绕开 EGO 轨迹
