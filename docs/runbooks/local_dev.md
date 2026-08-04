@@ -10,7 +10,7 @@
 |---|---|---|
 | ROS 2 | Lyrical（Ubuntu 26.04，Python 3.14） | Jazzy（Python 3.12） |
 | 角色 | 代码开发 + 逻辑回归 | 权威构建 + 仿真/真机 |
-| GUI | Foxglove Studio、rviz2、rqt 可用 | 无头（foxglove_bridge 常驻 8765） |
+| GUI | Foxglove Studio、rviz2、rqt、PlotJuggler 可用 | 无头（foxglove_bridge 常驻 8765） |
 
 本地构建产物只是测试沙盒，不与 Socl 共享。
 
@@ -34,8 +34,10 @@ python3 -m pytest src/bridge_competition_pkg/test/ src/drone_navigation_pkg/test
 
 ## 本地跳过的包及原因
 
-- `nav2_demo_pkg` —— 依赖 Nav2 栈，本地未安装；纯 launch/config，无测试。
-  需要时：`sudo apt install ros-lyrical-navigation2`。
+- `nav2_demo_pkg` —— 依赖 Nav2 栈，但 **Nav2 尚未为 Lyrical 发布到
+  packages.ros.org**（新发行版窗口期；Jazzy 上有 `ros-jazzy-navigation2`）。
+  该包只含 launch/config，无代码、无测试，实际导航栈在 Socl 的 Jazzy 跑。
+  等 Lyrical 的 Nav2 上 apt 后再启用。
 - `px4_ros_com` —— vendored 上游示例，使用 Lyrical 已移除的
   `ament_target_dependencies`；非比赛链路，不修。
 - `grasp_demo_pkg` / `isaac_ros2_control` —— 无 test/ 目录，不进测试集。
