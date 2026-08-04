@@ -33,23 +33,27 @@ target_include_directories(flight_core PUBLIC
   $<INSTALL_INTERFACE:include>)
 
 add_executable(px4_state_adapter src/px4_state_adapter_node.cpp)
-ament_target_dependencies(px4_state_adapter nav_msgs px4_msgs rclcpp std_msgs)
+target_link_libraries(px4_state_adapter
+  ${nav_msgs_TARGETS} ${px4_msgs_TARGETS} ${rclcpp_TARGETS} ${std_msgs_TARGETS})
 target_link_libraries(px4_state_adapter flight_core)
 
 add_executable(ego_local_planner src/ego_local_planner_node.cpp)
-ament_target_dependencies(
-  ego_local_planner geometry_msgs nav_msgs rclcpp sensor_msgs std_msgs
-  tf2 tf2_geometry_msgs tf2_ros tf2_sensor_msgs)
+target_link_libraries(ego_local_planner
+  ${geometry_msgs_TARGETS} ${nav_msgs_TARGETS} ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS} ${std_msgs_TARGETS} ${tf2_TARGETS}
+  ${tf2_geometry_msgs_TARGETS} ${tf2_ros_TARGETS} ${tf2_sensor_msgs_TARGETS})
 target_link_libraries(ego_local_planner flight_core)
 
 add_executable(trajectory_executor src/trajectory_executor_node.cpp)
-ament_target_dependencies(
-  trajectory_executor geometry_msgs nav_msgs px4_msgs rclcpp std_msgs)
+target_link_libraries(trajectory_executor
+  ${geometry_msgs_TARGETS} ${nav_msgs_TARGETS} ${px4_msgs_TARGETS}
+  ${rclcpp_TARGETS} ${std_msgs_TARGETS})
 target_link_libraries(trajectory_executor flight_core)
 
 add_executable(flight_supervisor src/flight_supervisor_node.cpp)
-ament_target_dependencies(
-  flight_supervisor geometry_msgs nav_msgs rclcpp sensor_msgs std_msgs)
+target_link_libraries(flight_supervisor
+  ${geometry_msgs_TARGETS} ${nav_msgs_TARGETS} ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS} ${std_msgs_TARGETS})
 target_link_libraries(flight_supervisor flight_core)
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")

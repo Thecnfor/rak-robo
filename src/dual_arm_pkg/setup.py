@@ -15,6 +15,7 @@ setup(
     ],
     install_requires=['setuptools'],
     tests_require=['pytest', 'rclpy'],
+    test_suite='test',
     maintainer='A',
     maintainer_email='a@team.example.com',
     description='Mercury X1 dual-arm driver.',
