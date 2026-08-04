@@ -21,7 +21,7 @@
 bash -c 'source /opt/ros/lyrical/setup.bash && source install/setup.bash && <cmd>'
 
 # 构建（跳过本地无法/无需构建的包）
-colcon build --packages-skip nav2_demo_pkg px4_ros_com
+colcon build --packages-skip nav2_demo_pkg
 
 # 测试（77 用例全绿为基线）
 colcon test --packages-select drone_navigation_pkg perception_competition_pkg \
@@ -38,8 +38,6 @@ python3 -m pytest src/bridge_competition_pkg/test/ src/drone_navigation_pkg/test
   packages.ros.org**（新发行版窗口期；Jazzy 上有 `ros-jazzy-navigation2`）。
   该包只含 launch/config，无代码、无测试，实际导航栈在 Socl 的 Jazzy 跑。
   等 Lyrical 的 Nav2 上 apt 后再启用。
-- `px4_ros_com` —— vendored 上游示例，使用 Lyrical 已移除的
-  `ament_target_dependencies`；非比赛链路，不修。
 - `grasp_demo_pkg` / `isaac_ros2_control` —— 无 test/ 目录，不进测试集。
 
 ## 观测链路（本地 GUI + 远程仿真）

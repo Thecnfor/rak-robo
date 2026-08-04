@@ -1,6 +1,6 @@
 """Pure helpers for validating the Isaac/PX4 ROS graph contract."""
 
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 
 FMU_INPUT_TOPICS = (
@@ -16,38 +16,6 @@ COMMAND_TOPICS = (
     '/drone0/control/rotor2/ref',
     '/drone0/control/rotor3/ref',
 )
-
-
-def _message_version_from_type(ros_type_name: str) -> int:
-    """Return the ``MESSAGE_VERSION`` constant embedded in a px4_msgs class.
-
-    Returns 0 when the type is not a px4_msgs message or has no
-    ``MESSAGE_VERSION`` constant. Importing is cached by Python.
-    """
-    if not ros_type_name or not ros_type_name.startswith('px4_msgs/msg/'):
-        return 0
-    parts = ros_type_name.split('/')
-    if len(parts) != 3:
-        return 0
-    module_path, _, class_name = parts
-    try:
-        module = __import__(module_path, fromlist=[class_name])
-        cls = getattr(module, class_name, None)
-    except Exception:
-        return 0
-    if cls is None:
-        return 0
-    # The generated message class exposes MESSAGE_VERSION as a plain class
-    # attribute (upper-case name == the .msg constant name).
-    for key in ('MESSAGE_VERSION', 'message_version'):
-        value = getattr(cls, key, None)
-        if value is None:
-            continue
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-    return 0
 
 
 def resolve_actual_topic(
@@ -112,10 +80,6 @@ def evaluate_interface(
         if resolved[name] in COMMAND_TOPICS and
         not _lookup(subscriber_nodes, resolved[name])
     ]
-    multiple_writers = [
-        name for name in FMU_INPUT_TOPICS
-        if len(_lookup(publisher_nodes, name)) > 1
-    ]
     invalid_writers: Dict[str, List[str]] = {}
     if require_fmu_writer:
         for name in FMU_INPUT_TOPICS:
@@ -131,7 +95,6 @@ def evaluate_interface(
         'unpublished': unpublished,
         'disconnected_commands': disconnected_commands,
         'unique_fmu_writer': not invalid_writers,
-        'multiple_fmu_writers': multiple_writers,
         'invalid_fmu_writers': invalid_writers,
         'resolved_topics': resolved,
     }

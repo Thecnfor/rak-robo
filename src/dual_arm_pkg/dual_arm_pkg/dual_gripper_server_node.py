@@ -6,9 +6,9 @@ Exposes both the original ``/demo_gripper_command`` action
 right sides with independent positions) on a single node. Either side can
 move in lock-step (same command) or independently (different commands on
 ``DualGripperCommand``). All commands target the standard
-``/hand_command`` ``JointState`` topic consumed by
-``isaac_ros2_control`` / Isaac Sim's ``ArticulationController`` via the
-X1 ground OmniGraph (added in scene_app.py 2026-07-20).
+``/hand_command`` ``JointState`` topic consumed by Isaac Sim's
+``ArticulationController`` via the X1 ground OmniGraph (added in
+scene_app.py 2026-07-20).
 
 Topic/action contract:
 

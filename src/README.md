@@ -23,7 +23,7 @@ colcon ROS2 workspace。**workspace/ 下面直接就是 src/，不要其他东�
 | `bridge_competition_pkg/` | 比赛包（ament_python）| host bringup、接口审计和 direct-rotor 烟测 |
 | `drone_navigation_pkg/` | 比赛包（ament_cmake, GPL-3.0）| PX4 状态、局部规划、Offboard executor 和飞行状态机 |
 | `competition_orchestrator_pkg/` | 比赛包（ament_python）| 空地协同、货舱门和无人机任务调度 |
-| `px4_msgs/` / `px4_ros_com/` | 第三方 ROS 2 包 | PX4 消息、Offboard 示例和坐标系转换 |
+| `px4_msgs/` | 第三方 ROS 2 包 | PX4 消息 |
 
 ## 无人机技术路线（2026-07-18 确认）
 

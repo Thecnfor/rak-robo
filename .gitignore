@@ -16,6 +16,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Local tooling caches (CodeGraph index, memory, ponytail debt)
+.codegraph/
+.remember/
+
 # =====================================================
 # macOS 系统垃圾(防止 _* 文件被 commit)
 # =====================================================

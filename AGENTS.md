@@ -47,7 +47,7 @@ Top-level layout:
 | `bridge_competition_pkg` (C) | ament_python | Host bringup, runtime interface audit, Foxglove, mutually-exclusive direct-rotor smoke test. **Does not plan, does not publish PX4 setpoints.** |
 | `drone_navigation_pkg` (D) | ament_cmake (C++17, **GPL-3.0-only**) | PX4 NED/FRD adaptation, isolated voxel/A*/B-spline planning core, 20 Hz Offboard executor (the **only** writer of `/fmu/in/*`), flight safety supervisor. |
 | `competition_orchestrator_pkg` (D) | ament_python | Air-ground coordinator, cargo-door actions, drone mission actions. |
-| `px4_msgs`, `px4_ros_com` | third-party | Vendored PX4 messages and Offboard examples. Keep on `release/1.16`. |
+| `px4_msgs` | third-party | Vendored PX4 messages. Keep on `release/1.16`. |
 
 Owners: A=dual-arm, B=perception, C=host bringup, D=drone + air-ground.
 
@@ -431,11 +431,8 @@ PX4 Docker environment consistent on those four.
   python3 -m pytest \
     src/bridge_competition_pkg/test/test_interface_contract.py::InterfaceContractTest::test_<method>
   ```
-- **Lint-only packages**: `nav2_demo_pkg`, `px4_ros_com`, and `px4_msgs`
+- **Lint-only packages**: `nav2_demo_pkg` and `px4_msgs`
   only run `ament_lint_auto_find_test_dependencies()` (lint, no unit tests).
-  `px4_ros_com/test/` contains vendored PX4 SITL scripts (`test_input.py`,
-  `test_output.py`, `pipeline_io_test.py`); they are **not** registered with
-  `colcon test` and must be run as a separate SITL pipeline.
 - **`dual_arm_pkg`** has no tests yet — `package.xml` declares the
   `test_depend`s but `test/` is empty.
 - **`grasp_demo_pkg`, `grasp_demo_interfaces`, `isaac_ros2_control`** have no

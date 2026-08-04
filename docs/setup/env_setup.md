@@ -8,7 +8,7 @@
 |---|---|---|
 | PegasusSimulator | `~/Documents/PegasusSimulator` | 5.1 兼容，提供 Multirotor vehicle + 3 个 backend |
 | PX4 SITL | `/var/workspace/docker/isaac/docker/px4/` | Docker 部署，PX4 v1.16.2，通过 uXRCE-DDS/MAVLink 联调 |
-| px4_msgs / px4_ros_com | `workspace/src/` | ROS 2 与 PX4 的消息、Offboard 控制及坐标系转换 |
+| px4_msgs | `workspace/src/` | ROS 2 与 PX4 的消息 |
 | cuRobo | 0.8.0 | Isaac Sim 5.1 依赖版本已回退 |
 | Isaac Sim | 5.1.0 (conda `isaacsim51`) | ROS_DOMAIN_ID=45, RMW=`rmw_fastrtps_cpp` |
 | ROS2 Jazzy | `/opt/ros/jazzy` | 全套装好 |

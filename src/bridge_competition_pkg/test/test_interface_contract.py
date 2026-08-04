@@ -51,9 +51,9 @@ class InterfaceContractTest(unittest.TestCase):
 
         self.assertFalse(result['ok'])
         self.assertEqual(result['missing'], ['/missing'])
-        self.assertEqual(
-            result['multiple_fmu_writers'],
-            ['/fmu/in/trajectory_setpoint'],
+        self.assertIn(
+            '/fmu/in/trajectory_setpoint',
+            result['invalid_fmu_writers'],
         )
 
     def test_rejects_missing_or_impersonating_fmu_writer(self):

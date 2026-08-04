@@ -35,8 +35,7 @@ Local build/test caveats and the full dev loop live in
 `docs/runbooks/local_dev.md`. Key points: the interactive shell is zsh,
 so source ROS inside bash
 (`bash -c 'source /opt/ros/lyrical/setup.bash && ...'`); locally skip
-`nav2_demo_pkg` (Nav2 is not yet released for Lyrical) and `px4_ros_com`
-(uses a CMake API removed in Lyrical).
+`nav2_demo_pkg` (Nav2 is not yet released for Lyrical).
 
 ## Build, test, and lint commands
 
@@ -166,7 +165,7 @@ ros2 launch bridge_competition_pkg host_bridge_bringup.launch.py record_bag:=tru
 - **`grasp_demo_pkg`** is an `ament_python` package containing the perception, geometry, arm-motion, gripper, and pick/place teaching nodes. Its `setup.py` installs the Python console entry points plus launch files, YAML parameters, and model weights.
 - **`nav2_demo_pkg`** is an `ament_cmake` package that installs Nav2 launch files, YAML configuration, maps, RViz layouts, and helper scripts. It launches nodes from the installed Nav2 stack rather than implementing a navigation stack in this repository.
 - **`isaac_ros2_control`** is an independent minimal `ament_python` starter for verifying host-to-Isaac and Isaac-to-host ROS topic connectivity.
-- **`px4_msgs`** and **`px4_ros_com`** provide the PX4 ROS 2 contracts, Offboard examples, and frame transforms. Keep message definitions synchronized with the PX4 SITL version.
+- **`px4_msgs`** provides the PX4 ROS 2 contracts and frame-transform annotations. Keep message definitions synchronized with the PX4 SITL version.
 
 ### Grasp perception-to-planning flow
 
