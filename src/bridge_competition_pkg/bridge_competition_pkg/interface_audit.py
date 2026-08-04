@@ -47,6 +47,7 @@ PX4_REQUIRED_TOPICS = [
     '/fmu/out/vehicle_command_ack',
     '/fmu/out/vehicle_land_detected',
     '/drone/navigation/fixed_setpoint',
+    '/drone/navigation/accepted_trajectory_id',
     '/fmu/in/offboard_control_mode',
     '/fmu/in/trajectory_setpoint',
     '/fmu/in/vehicle_command',
@@ -61,6 +62,15 @@ DIRECT_ROTOR_REQUIRED_TOPICS = [
 ]
 
 DEFAULT_REQUIRED_TOPICS = PX4_REQUIRED_TOPICS
+
+# Acceptance-only interfaces are deliberately excluded from normal bringup
+# requirements. They are code-as-spec here so test tooling cannot silently add
+# production-looking /drone topics without a matching documented contract.
+OPTIONAL_ACCEPTANCE_TEST_TOPICS = {
+    '/drone/test/dynamic_obstacle_command': 'std_msgs/msg/String',
+    '/drone/test/dynamic_obstacle_status': 'std_msgs/msg/String',
+    '/drone/test/preemption_cloud': 'sensor_msgs/msg/PointCloud2',
+}
 
 
 class InterfaceAudit(Node):

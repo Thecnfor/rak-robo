@@ -30,6 +30,9 @@ setup(
             'mission_trigger = bridge_competition_pkg.mission_trigger:main',
             'ground_state_sim = bridge_competition_pkg.ground_state_sim:main',
             'cargo_status_sim = bridge_competition_pkg.cargo_status_sim:main',
+            'stage2_acceptance_audit = bridge_competition_pkg.stage2_acceptance:main',
+            'dynamic_obstacle_probe = bridge_competition_pkg.dynamic_obstacle_probe:main',
+            'dynamic_preemption_probe = bridge_competition_pkg.dynamic_preemption_probe:main',
         ],
     },
 )
