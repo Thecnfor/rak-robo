@@ -64,6 +64,15 @@ class _PlanToPoseServer(Node):
             JointState, '/hand_command',
             QoSProfile(depth=10, reliability=rclpy.qos.ReliabilityPolicy.RELIABLE),
         )
+        # /joint_command is what the X1 USD's baked-in ROS_JointStates
+        # graph actually subscribes; publishing the same JointState
+        # here makes the cuRobo IK output reach the live Isaac Sim
+        # articulation (and lets /hand_command keep being the local
+        # dual_arm_pkg contract).
+        self._joint_command_publisher = self.create_publisher(
+            JointState, '/joint_command',
+            QoSProfile(depth=10, reliability=rclpy.qos.ReliabilityPolicy.RELIABLE),
+        )
         curobo_ok = invoke_curobo is not None
         self.get_logger().info(
             f'plan_to_pose_server ready; cuRobo enabled='
@@ -153,6 +162,9 @@ class _PlanToPoseServer(Node):
         result = PlanToPose.Result()
         result.success = True
         result.message = f'ok ({request.label}) via {source}'
+        self.get_logger().info(
+            f'plan_to_pose result: {result.message}'
+        )
         # ``result.commanded_pose = pose`` is left unset on purpose: the
         # generated ``PlanToPose_Result`` C marshal asserts on the
         # concrete Python type at result-conversion time, which aborts
@@ -161,12 +173,38 @@ class _PlanToPoseServer(Node):
         # state machine only reads ``success`` / ``message`` so the
         # commanded pose stays out of the result for now.
         if request.execute:
-            self._publish_hand_command(
-                left=list(joints_used),
-                right=list(self.get_parameter('observation_pose_right').value),
-            )
+            # Per-side selection: dual_arm_pkg encodes the target arm
+            # in the label suffix ``[side=left]`` or ``[side=right]``.
+            # Single-arm callers (grasp_demo_pkg::plan_to_pose_node)
+            # pass a plain label and the request lands on the LEFT arm
+            # — backwards compatible with the existing M5.1 path.
+            # ponytail: replace the label-encoded side with a proper
+            # ``arm_side`` field once grasp_demo_interfaces gets the
+            # PlanToPose.action extension.
+            side = self._extract_side(request.label)
+            if side == 'right':
+                self._publish_hand_command(
+                    left=list(self.get_parameter('observation_pose_left').value),
+                    right=list(joints_used),
+                )
+            else:
+                self._publish_hand_command(
+                    left=list(joints_used),
+                    right=list(self.get_parameter('observation_pose_right').value),
+                )
         goal_handle.succeed()
         return result
+
+    @staticmethod
+    def _extract_side(label: str) -> str:
+        """Return ``'right'`` if the label ends with ``[side=right]``,
+        else ``'left'``. Unrecognised suffixes default to left."""
+        if not label:
+            return 'left'
+        suffix = label.split('[side=')
+        if len(suffix) < 2 or not suffix[1].startswith('right'):
+            return 'left'
+        return 'right'
 
     @staticmethod
     def _clamp_arm_joints(joints: list[float]) -> list[float]:
@@ -226,8 +264,15 @@ class _PlanToPoseServer(Node):
             + [_OPEN_GRIPPER, _OPEN_GRIPPER]
         )
         self._publisher.publish(state)
+        # Also publish on /joint_command so the X1 USD's baked-in
+        # ROS_JointStates graph (which subscribes /joint_command, not
+        # /hand_command) actually drives the articulation in the live
+        # Isaac Sim scene. The legacy dual_arm_pkg and any subscriber
+        # outside Isaac still sees /hand_command.
+        self._joint_command_publisher.publish(state)
         self.get_logger().info(
-            f'/hand_command: left={padded_left} right={padded_right}'
+            f'/hand_command + /joint_command: '
+            f'left={padded_left} right={padded_right}'
         )
 
     @staticmethod

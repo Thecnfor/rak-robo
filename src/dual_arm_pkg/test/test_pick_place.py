@@ -23,28 +23,28 @@ except ImportError:
 @unittest.skipUnless(_HAVE_RCLPY, 'rclpy not on PYTHONPATH')
 class GripperPositionTest(unittest.TestCase):
     def test_open_returns_open_position(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position('open'), 0.04)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position('open'), 0.04)
 
     def test_close_returns_closed_position(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position('close'), 0.0)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position('close'), 0.0)
 
     def test_stop_equals_close(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position('stop'), 0.0)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position('stop'), 0.0)
 
     def test_unknown_command_defaults_open(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position('xyz'), 0.04)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position('xyz'), 0.04)
 
     def test_empty_string_defaults_open(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position(''), 0.04)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position(''), 0.04)
 
     def test_whitespace_stripping(self):
-        from dual_arm_pkg.dual_gripper_server_node import _gripper_position
-        self.assertAlmostEqual(_gripper_position('  close  '), 0.0)
+        from dual_arm_pkg.joint_order import gripper_position
+        self.assertAlmostEqual(gripper_position('  close  '), 0.0)
 
 
 class DualActionSurfaceTest(unittest.TestCase):

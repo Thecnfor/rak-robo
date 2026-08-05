@@ -27,20 +27,17 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Header
 
-
-# 12-DOF observation pose: 6 left + 6 right (rad). Tuned to keep the arms
-# clear of the cargo bay and the down-camera frame. Mirrors the values in
-# `grasp_demo_pkg/demo_params.yaml::observation_pose` so the two demos
-# agree on what "ready" means.
-OBSERVATION_POSE_LEFT = [
-    0.0,  # arm_left_1  base yaw
-    -0.4,  # arm_left_2  shoulder pitch
-    0.6,  # arm_left_3  elbow
-    -0.2,  # arm_left_4  wrist 1
-    0.0,  # arm_left_5  wrist 2
-    0.0,  # arm_left_6  wrist 3
-]
-OBSERVATION_POSE_RIGHT = [p for p in OBSERVATION_POSE_LEFT]
+from .joint_order import (
+    GRIPPER_NEUTRAL_POSITION,
+    OBSERVATION_POSE_LEFT,
+    OBSERVATION_POSE_RIGHT,
+    X1_JOINT_ORDER,
+    X1_LEFT_ARM_JOINTS,
+    X1_LEFT_ARM_SLICE,
+    X1_RIGHT_ARM_JOINTS,
+    X1_WHEEL_SLICE,
+    X1_GRIPPER_SLICE,
+)
 
 
 class _ObservationPublisher(Node):
@@ -55,32 +52,28 @@ class _ObservationPublisher(Node):
         self._timer = self.create_timer(2.0, self._publish)
 
     def _resolve_joint_names(self) -> List[str]:
-        # Two wheel joints + 6 left + 6 right + 2 grippers. The order must
-        # match the JointState `position` vector below; any change here
-        # requires updating `demo_params.yaml::observation_pose` too.
+        # Single source of truth lives in joint_order.X1_JOINT_ORDER; the
+        # parameter is exposed only for backwards compatibility with the
+        # original launch-file override path.
         declared = self.declare_parameter(
-            'arm_joint_names',
-            [
-                'wheel_left_joint', 'wheel_right_joint',
-                'arm_left_joint_1', 'arm_left_joint_2', 'arm_left_joint_3',
-                'arm_left_joint_4', 'arm_left_joint_5', 'arm_left_joint_6',
-                'arm_right_joint_1', 'arm_right_joint_2', 'arm_right_joint_3',
-                'arm_right_joint_4', 'arm_right_joint_5', 'arm_right_joint_6',
-                'gripper_left_joint', 'gripper_right_joint',
-            ],
+            'arm_joint_names', list(X1_JOINT_ORDER),
         )
         return list(declared.value)
 
     def _build_state(self, joint_names: List[str]) -> JointState:
-        # left arm + right arm pose; wheels at 0; grippers half-open.
-        positions = (
-            [0.0, 0.0]  # wheels
-            + OBSERVATION_POSE_LEFT
-            + OBSERVATION_POSE_RIGHT
-            + [0.02, 0.02]  # grippers half-open (m)
+        # Use the shared slice indices so wheels / left arm / right arm /
+        # gripper stay in lockstep with joint_order.X1_JOINT_ORDER.
+        positions = [0.0] * len(X1_JOINT_ORDER)
+        positions[X1_WHEEL_SLICE] = [0.0, 0.0]
+        positions[X1_LEFT_ARM_SLICE] = list(OBSERVATION_POSE_LEFT)
+        positions[X1_LEFT_ARM_SLICE.stop:X1_LEFT_ARM_SLICE.stop + 6] = list(
+            OBSERVATION_POSE_RIGHT
         )
+        positions[X1_GRIPPER_SLICE] = [
+            GRIPPER_NEUTRAL_POSITION, GRIPPER_NEUTRAL_POSITION,
+        ]
         if len(joint_names) != len(positions):
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'joint_names ({len(joint_names)}) does not match positions '
                 f'({len(positions)}); using positions in declared order.')
         state = JointState()
