@@ -151,6 +151,8 @@ class _PickPlace(Node):
                 self, GripperCommand, '/demo_gripper_command'
             )
         self._publish_state()
+        # 0.5 s heartbeat ticks _tick(); the heartbeat itself is the timer.
+        self._wait_timer = self.create_timer(0.5, self._tick)
         self.get_logger().info(
             f'PickPlace ready: detect={self._detect_client is not None} '
             f'plan={self._plan_client is not None} '
@@ -546,16 +548,11 @@ class _PickPlace(Node):
             self._publish_arena_failed()
             return
 
-    def _heartbeat_timer(self) -> None:
-        if self._wait_timer is None:
-            self._wait_timer = self.create_timer(0.5, self._tick)
-
 
 def main() -> int:
     rclpy.init()
     try:
         node = _PickPlace()
-        node._heartbeat_timer()
         rclpy.spin(node)
         node.destroy_timer(node._wait_timer)
         node.destroy_node()
